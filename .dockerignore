@@ -1,0 +1,17 @@
+.git
+.gitignore
+*.md
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+coverage.out
+coverage.html
+*.test
+bin/
+dist/
+tmp/
+temp/
+
