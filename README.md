@@ -58,20 +58,7 @@ docker run -p 8080:8080 crypto-portfolio-tracker:latest
 
 ## API Documentation
 
-### Swagger UI
-
-Once the server is running, access Swagger documentation at:
-- http://localhost:8080/swagger/index.html
-
-### Generate Swagger Docs
-
-```bash
-# Install swag CLI first
-go install github.com/swaggo/swag/cmd/swag@latest
-
-# Generate docs
-make swagger
-```
+### Swagger
 
 ### Endpoints
 
