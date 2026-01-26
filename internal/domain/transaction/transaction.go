@@ -69,10 +69,13 @@ type TransactionResult struct {
 	TotalPages   int
 }
 
-type TransactionProvider interface {
-	GetTransactions(ctx context.Context, opts FilterOptions) (*TransactionResult, error)
-	GetTransactionByHash(ctx context.Context, hash string) (*Transaction, error)
+type Repository interface {
+	// GetTransactionsByAddress returns paginated transactions for an address
 	GetTransactionsByAddress(ctx context.Context, address string, opts FilterOptions) (*TransactionResult, error)
+	// GetAllTransactionsByAddress returns all transactions for an address (no pagination)
+	GetAllTransactionsByAddress(ctx context.Context, address string, opts FilterOptions) ([]Transaction, error)
+	GetTransactionByHash(ctx context.Context, hash string) (*Transaction, error)
+	GetTokenBalances(ctx context.Context, address string) (map[string]string, error) // token address -> balance
 }
 
 // ExtractMethodSignature extracts the method signature (first 4 bytes) from transaction input data
@@ -99,26 +102,38 @@ func (tx *Transaction) ClassifyType(input string) TransactionType {
 	transferSig := "0xa9059cbb"     // transfer(address,uint256)
 	transferFromSig := "0x23b872dd" // transferFrom(address,address,uint256)
 	// approveSig := "0x095ea7b3"   // approve(address,uint256) - not used in classification
-	swapSig := "0x7ff36ab5"    // swapExactETHForTokens (Uniswap V2)
-	swapSig2 := "0x02751cec"   // swap (Uniswap V3)
-	stakeSig := "0x3d18b912"   // stake(uint256)
-	depositSig := "0xb6b55f25" // deposit(uint256) - common staking pattern
+
+	// Swap method signatures (DeFi)
+	swapSig := "0x7ff36ab5"  // swapExactETHForTokens (Uniswap V2)
+	swapSig2 := "0x02751cec" // swap (Uniswap V3)
+	swapSig3 := "0x38ed1739" // swapExactTokensForTokens (Uniswap V2)
+	swapSig4 := "0x8803dbee" // swapTokensForExactTokens (Uniswap V2)
+	swapSig5 := "0x4a25d94a" // swapETHForExactTokens (Uniswap V2)
+	swapSig6 := "0x791ac947" // swapExactTokensForETH (Uniswap V2)
+	swapSig7 := "0x414bf389" // exactInputSingle (Uniswap V3)
+	swapSig8 := "0xdb3e2198" // exactInput (Uniswap V3)
+	swapSig9 := "0x5c11d795" // swapExactTokensForTokensSupportingFeeOnTransferTokens (Uniswap V2)
+
+	// Staking method signatures
+	stakeSig := "0x3d18b912"    // stake(uint256)
+	depositSig := "0xb6b55f25"  // deposit(uint256) - common staking pattern
+	stakeSig2 := "0x1249c58b"   // stake() - no parameters
+	depositSig2 := "0xd0e30db0" // deposit() - payable
+	depositSig3 := "0x47e7ef24" // deposit(uint256,address) - with recipient
 
 	methodSig = strings.ToLower(methodSig)
 
 	switch methodSig {
 	case transferSig, transferFromSig:
 		return TransactionTypeSend
-	case swapSig, swapSig2:
+	case swapSig, swapSig2, swapSig3, swapSig4, swapSig5, swapSig6, swapSig7, swapSig8, swapSig9:
 		return TransactionTypeSwap
-	case stakeSig, depositSig:
+	case stakeSig, depositSig, stakeSig2, depositSig2, depositSig3:
 		return TransactionTypeStake
 	default:
-		// If it's a simple ETH transfer (no input or empty input)
 		if input == "" || input == "0x" {
 			return TransactionTypeSend
 		}
-		// Default to send for unknown methods
 		return TransactionTypeSend
 	}
 }
@@ -140,13 +155,26 @@ func (tx *Transaction) DetectDirection(address string) TransactionDirection {
 
 func (tx *Transaction) MethodName() string {
 	methodMap := map[string]string{
+		// ERC-20 methods
 		"0xa9059cbb": "transfer",
 		"0x23b872dd": "transferFrom",
 		"0x095ea7b3": "approve",
+		// Swap methods
 		"0x7ff36ab5": "swapExactETHForTokens",
 		"0x02751cec": "swap",
+		"0x38ed1739": "swapExactTokensForTokens",
+		"0x8803dbee": "swapTokensForExactTokens",
+		"0x4a25d94a": "swapETHForExactTokens",
+		"0x791ac947": "swapExactTokensForETH",
+		"0x414bf389": "exactInputSingle",
+		"0xdb3e2198": "exactInput",
+		"0x5c11d795": "swapExactTokensForTokensSupportingFeeOnTransferTokens",
+		// Staking methods
 		"0x3d18b912": "stake",
 		"0xb6b55f25": "deposit",
+		"0x1249c58b": "stake",
+		"0xd0e30db0": "deposit",
+		"0x47e7ef24": "deposit",
 	}
 
 	methodSig := strings.ToLower(tx.MethodSig)

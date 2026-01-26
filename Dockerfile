@@ -22,8 +22,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./cmd/http
 # Final stage
 FROM alpine:latest
 
-# Install ca-certificates for HTTPS requests
-RUN apk --no-cache add ca-certificates
+# Install ca-certificates for HTTPS requests, sqlite3 for migrations, and wget for healthcheck
+RUN apk --no-cache add ca-certificates sqlite wget
 
 WORKDIR /root/
 
@@ -31,6 +31,10 @@ WORKDIR /root/
 COPY --from=builder /app/main .
 # Copy static files
 COPY --from=builder /app/static ./static
+# Copy migrations
+COPY --from=builder /app/migrations ./migrations
+# Copy scripts
+COPY --from=builder /app/scripts ./scripts
 
 # Expose port
 EXPOSE 8080

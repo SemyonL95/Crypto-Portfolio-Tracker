@@ -3,8 +3,10 @@ module testtask
 go 1.25
 
 require (
+	github.com/davecgh/go-spew v1.1.1
 	github.com/google/uuid v1.6.0
 	github.com/labstack/echo/v4 v4.15.0
+	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/swaggo/echo-swagger v1.4.1
 	go.uber.org/zap v1.27.0
 )

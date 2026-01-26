@@ -1,4 +1,4 @@
-.PHONY: build run test test-coverage docker-build docker-up docker-down swagger clean
+.PHONY: build run test test-coverage docker-build docker-up docker-down swagger clean migrate-up migrate-down migrate-reset migrate-status migrate-up-docker migrate-down-docker
 
 # Build the application
 build:
@@ -47,4 +47,25 @@ deps:
 # Run linter
 lint:
 	golangci-lint run
+
+# Database migration variables
+DB_PATH ?= ./data/portfolio.db
+MIGRATIONS_DIR = migrations
+MIGRATE_SCRIPT = scripts/migrate.sh
+
+# Run all up migrations
+migrate-up:
+	@DB_PATH=$(DB_PATH) MIGRATIONS_DIR=$(MIGRATIONS_DIR) $(MIGRATE_SCRIPT) up
+
+# Run all down migrations (rollback)
+migrate-down:
+	@DB_PATH=$(DB_PATH) MIGRATIONS_DIR=$(MIGRATIONS_DIR) $(MIGRATE_SCRIPT) down
+
+# Reset database (drop all and reapply migrations)
+migrate-reset:
+	@DB_PATH=$(DB_PATH) MIGRATIONS_DIR=$(MIGRATIONS_DIR) $(MIGRATE_SCRIPT) reset
+
+# Show migration status
+migrate-status:
+	@DB_PATH=$(DB_PATH) MIGRATIONS_DIR=$(MIGRATIONS_DIR) $(MIGRATE_SCRIPT) status
 

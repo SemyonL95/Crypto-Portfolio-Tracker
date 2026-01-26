@@ -6,8 +6,9 @@ import (
 	"net/http"
 	"strconv"
 	"testtask/internal/adapters/logger"
+	"testtask/internal/domain/holding"
 	"testtask/internal/domain/portfolio"
-	"testtask/internal/domain/price"
+	"testtask/internal/domain/token"
 	"time"
 
 	httpports "testtask/internal/ports/http"
@@ -16,7 +17,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// HandlerAdapter adapts domain services to HTTP handlers
+// HandlerAdapter adapts holding services to HTTP handlers
 type HandlerAdapter struct {
 	transactionService httpports.TransactionService
 	portfolioService   httpports.PortfolioService
@@ -63,17 +64,16 @@ func (h *HandlerAdapter) CreatePortfolio(c echo.Context) error {
 		})
 	}
 
-	// Get portfolioID from path parameter
+	// GetByID portfolioID from path parameter
 	portfolioID := c.Param("portfolioID")
 
-	// Create domain portfolio
+	// Create holding portfolio
 	domainPortfolio := &portfolio.Portfolio{
 		ID:      portfolioID,
 		Address: req.Address,
 	}
 
 	if err := h.portfolioService.CreatePortfolio(c.Request().Context(), domainPortfolio); err != nil {
-		// Check if it's a duplicate address error
 		if errors.Is(err, portfolio.ErrPortfolioAddressExists) {
 			h.logger.Warn("Portfolio creation failed: address exists", zap.String("address", req.Address), zap.Error(err))
 			return c.JSON(http.StatusConflict, httpports.ErrorResponse{
@@ -81,7 +81,6 @@ func (h *HandlerAdapter) CreatePortfolio(c echo.Context) error {
 				Message: err.Error(),
 			})
 		}
-		// Check for invalid portfolio error
 		if errors.Is(err, portfolio.ErrPortfolioNotFound) {
 			h.logger.Warn("Portfolio creation failed: not found", zap.String("portfolioID", portfolioID), zap.Error(err))
 			return c.JSON(http.StatusBadRequest, httpports.ErrorResponse{
@@ -96,9 +95,6 @@ func (h *HandlerAdapter) CreatePortfolio(c echo.Context) error {
 		})
 	}
 
-	// Fetch the created portfolio to return it
-	// If portfolioID was provided in path, use it; otherwise service generated a new ID
-	// but we don't have access to it, so we'll return a simpler response
 	if portfolioID != "" {
 		createdPortfolio, err := h.portfolioService.GetPortfolio(c.Request().Context(), portfolioID)
 		if err != nil {
@@ -111,8 +107,6 @@ func (h *HandlerAdapter) CreatePortfolio(c echo.Context) error {
 		return c.JSON(http.StatusCreated, httpports.ToHTTPPortfolio(createdPortfolio, nil))
 	}
 
-	// If portfolioID was empty, service generated a new ID but we don't have access to it
-	// Return a success response (in production, you might want to add GetByAddress to service)
 	return c.JSON(http.StatusCreated, map[string]interface{}{
 		"address": req.Address,
 		"message": "portfolio created successfully",
@@ -137,7 +131,7 @@ func (h *HandlerAdapter) GetPortfolio(c echo.Context) error {
 		})
 	}
 
-	var tokens []*price.Token
+	var tokens []*token.Token
 	for _, holding := range portfolio.Holdings {
 		tokens = append(tokens, holding.Token)
 	}
@@ -154,7 +148,7 @@ func (h *HandlerAdapter) GetPortfolio(c echo.Context) error {
 	return c.JSON(http.StatusOK, httpports.ToHTTPPortfolio(portfolio, prices))
 }
 
-// AddHolding handles POST /api/v1/portfolio/:portofolioID/holdings
+// AddHolding handles POST /api/v1/portfolio/:portofolioID/holdingRepo
 func (h *HandlerAdapter) AddHolding(c echo.Context) error {
 	portofolioID := c.Param("portofolioID")
 	if portofolioID == "" {
@@ -175,7 +169,6 @@ func (h *HandlerAdapter) AddHolding(c echo.Context) error {
 		})
 	}
 
-	// Check if token is supported by address or symbol
 	if req.TokenAddress == "" {
 		return c.JSON(http.StatusBadRequest, httpports.ErrorResponse{
 			Error:   "Bad Request",
@@ -191,7 +184,7 @@ func (h *HandlerAdapter) AddHolding(c echo.Context) error {
 		})
 	}
 
-	holding := portfolio.NewHolding(portofolioID, "", t, big.NewInt(int64(req.Amount)))
+	holding := holding.NewHolding(portofolioID, "", t, big.NewInt(int64(req.Amount)))
 	if err := h.portfolioService.AddHolding(c.Request().Context(), portofolioID, holding); err != nil {
 		return c.JSON(http.StatusInternalServerError, httpports.ErrorResponse{
 			Error:   "Internal Server Error",
@@ -202,7 +195,7 @@ func (h *HandlerAdapter) AddHolding(c echo.Context) error {
 	return c.JSON(http.StatusCreated, holding)
 }
 
-// UpdateHolding handles PUT /api/v1/portfolio/:portofolioID/holdings/:holdingID
+// UpdateHolding handles PUT /api/v1/portfolio/:portofolioID/holdingRepo/:holdingID
 func (h *HandlerAdapter) UpdateHolding(c echo.Context) error {
 	portofolioID := c.Param("portofolioID")
 	holdingID := c.Param("holdingID")
@@ -234,7 +227,7 @@ func (h *HandlerAdapter) UpdateHolding(c echo.Context) error {
 	return c.JSON(http.StatusOK, nil)
 }
 
-// DeleteHolding handles DELETE /api/v1/portfolio/:portofolioId/holdings/:holdingID
+// DeleteHolding handles DELETE /api/v1/portfolio/:portofolioId/holdingRepo/:holdingID
 func (h *HandlerAdapter) DeleteHolding(c echo.Context) error {
 	portofolioID := c.Param("portofolioID")
 	holdingID := c.Param("holdingID")
@@ -262,9 +255,15 @@ func (h *HandlerAdapter) GetTransactions(c echo.Context) error {
 	}
 
 	// Parse query parameters
-	if addressParam := c.QueryParam("address"); addressParam != "" {
-		filters.Address = &addressParam
+	addressParam := c.QueryParam("address")
+	if addressParam == "" {
+		return c.JSON(http.StatusBadRequest, httpports.ErrorResponse{
+			Error:   "Bad Request",
+			Message: "address is required ",
+		})
 	}
+	filters.Address = &addressParam
+
 	if typeParam := c.QueryParam("type"); typeParam != "" {
 		filters.Type = &typeParam
 	}
@@ -316,25 +315,38 @@ func (h *HandlerAdapter) GetTransactions(c echo.Context) error {
 	return c.JSON(http.StatusOK, response)
 }
 
-func (h *HandlerAdapter) GetTransactionByHash(c echo.Context) error {
-	hash := c.Param("hash")
-	if hash == "" {
+func (h *HandlerAdapter) GetPortfolioAssets(c echo.Context) error {
+	portfolioID := c.Param("portfolioID")
+	if portfolioID == "" {
 		return c.JSON(http.StatusBadRequest, httpports.ErrorResponse{
 			Error:   "Bad Request",
-			Message: "hash is required",
+			Message: "portfolioID is required",
 		})
 	}
 
-	transaction, err := h.transactionService.GetTransactionByHash(c.Request().Context(), hash)
+	// Get currency from query parameter, default to "usd"
+	currency := c.QueryParam("currency")
+	if currency == "" {
+		currency = "usd"
+	}
+
+	assets, err := h.portfolioService.GetPortfolioAssets(c.Request().Context(), portfolioID, currency)
 	if err != nil {
-		h.logger.Warn("Transaction not found", zap.String("hash", hash), zap.Error(err))
-		return c.JSON(http.StatusNotFound, httpports.ErrorResponse{
-			Error:   "Not Found",
+		if errors.Is(err, portfolio.ErrPortfolioNotFound) {
+			h.logger.Warn("Portfolio not found", zap.String("portfolioID", portfolioID), zap.Error(err))
+			return c.JSON(http.StatusNotFound, httpports.ErrorResponse{
+				Error:   "Not Found",
+				Message: err.Error(),
+			})
+		}
+		h.logger.Error("Failed to get portfolio assets", zap.String("portfolioID", portfolioID), zap.Error(err))
+		return c.JSON(http.StatusInternalServerError, httpports.ErrorResponse{
+			Error:   "Internal Server Error",
 			Message: err.Error(),
 		})
 	}
 
-	return c.JSON(http.StatusOK, httpports.ToHTTPTransaction(transaction))
+	return c.JSON(http.StatusOK, httpports.ToHTTPPortfolioAssets(assets))
 }
 
 func (h *HandlerAdapter) HealthCheck(c echo.Context) error {

@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # Main application service
   app:
     build:
       context: .
@@ -18,10 +19,17 @@ services:
       - PRICE_FALLBACK_ENABLED=true
       - TRANSACTION_REQUEST_TIMEOUT=10s
       - TRANSACTION_RATE_LIMIT_RPS=5
+      - DB_PATH=/data/portfolio.db
       # Optional: Add your CoinGecko API key
       # - COINGECKO_API_KEY=your_api_key_here
     volumes:
       - ./static:/root/static:ro
+      - ./data:/data
+      - ./migrations:/root/migrations:ro
+      - ./scripts:/root/scripts:ro
+    depends_on:
+      migrate-init:
+        condition: service_completed_successfully
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]

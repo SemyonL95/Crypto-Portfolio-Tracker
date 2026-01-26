@@ -2,82 +2,173 @@ package price
 
 import (
 	"context"
-	"testtask/internal/domain/price"
+	"fmt"
+	"testtask/internal/application/ratelimiter"
+	"testtask/internal/domain"
+	domainPrice "testtask/internal/domain/price"
+	domainToken "testtask/internal/domain/token"
+	"time"
 )
 
-// CacheService wraps a PriceProvider with cache-aside pattern and TTL
-// This is an adapter that adds caching behavior to any PriceProvider
-type CacheService struct {
-	cache            price.PriceCache
-	primaryProvider  price.PriceProvider
-	fallbackProvider price.PriceProvider
+const cacheTTL = 1 * time.Minute
+
+type Service struct {
+	cacheTTL         time.Duration
+	cache            domain.Cache[string, domainPrice.Price]
+	primaryProvider  domainPrice.Provider
+	fallbackProvider domainPrice.Provider
+	rateLimiter      *ratelimiter.RateLimiter
 }
 
-// NewCacheService creates a new cached price provider
-func NewCacheService(cache price.PriceCache) *CacheService {
-	return &CacheService{
-		cache: cache,
-	}
+type RateLimitedService struct {
+	maxBatchSize int
+	rateLimiter  domain.RateLimiterService
+	provider     domainPrice.Provider
 }
 
-// SetProviders sets the primary and fallback price providers
-func (s *CacheService) SetProviders(primary, fallback price.PriceProvider) {
-	s.primaryProvider = primary
-	s.fallbackProvider = fallback
-}
+func (r *RateLimitedService) GetPrices(ctx context.Context, tokens []*domainToken.Token, currency string) (map[*domainToken.Token]*domainPrice.Price, error) {
+	results := make(map[*domainToken.Token]*domainPrice.Price)
 
-// GetPrices retrieves prices for multiple tokens with cache-aside pattern
-// Implements PriceProvider interface from domain
-func (s *CacheService) GetPrices(
-	ctx context.Context,
-	tokens []*price.Token,
-	currency string,
-) (map[*price.Token]*price.Price, error) {
-	results := make(map[*price.Token]*price.Price)
-	var missedTokens []*price.Token
-
-	// Check cache for all tokens
-	var tokenIDs []string
-	for _, token := range tokens {
-		tokenIDs = append(tokenIDs, token.ID)
-	}
-
-	prices, err := s.cache.GetPrices(ctx, tokenIDs, currency)
-	if err == nil {
-		for _, token := range tokens {
-			if _, ok := prices[token.ID]; !ok {
-				missedTokens = append(missedTokens, token)
-			} else {
-				results[token] = prices[token.ID]
-			}
+	for i := 0; i < len(tokens); i += r.maxBatchSize {
+		end := i + r.maxBatchSize
+		if end > len(tokens) {
+			end = len(tokens)
 		}
-	} else {
-		// TODO log error
-		missedTokens = tokens
-	}
 
-	// Fetch missed tokens from provider
-	if len(missedTokens) > 0 {
-		fetched, err := s.primaryProvider.GetPrices(ctx, missedTokens, currency)
-		if err != nil {
-			//TODO log error
+		batchTokens := tokens[i:end]
 
-			// we assume that here will no errors
-			fetched, err = s.fallbackProvider.GetPrices(ctx, missedTokens, currency)
+		batchResults := make(map[*domainToken.Token]*domainPrice.Price)
+		// If rate limiter allows (returns nil), call the provider
+		if err := r.rateLimiter.Allow(ctx); err == nil {
+			res, err := r.provider.GetPrices(ctx, batchTokens, currency)
 			if err != nil {
+				// TODO add logging
 				return nil, err
 			}
+			batchResults = res
 		}
+		// If rate limit exceeded (error returned), skip this batch
 
-		for token, price := range fetched {
+		for token, price := range batchResults {
 			results[token] = price
-		}
-
-		errCache := s.cache.SetPrices(ctx, results, currency)
-		if errCache != nil {
-			// TODO log err
 		}
 	}
 
 	return results, nil
+}
+
+func NewService(
+	cache domain.Cache[string, domainPrice.Price],
+	primaryProvider domainPrice.Provider,
+	fallbackProvider domainPrice.Provider,
+	rateLimiter *ratelimiter.RateLimiter,
+) *Service {
+	return &Service{
+		cacheTTL:         cacheTTL,
+		cache:            cache,
+		primaryProvider:  primaryProvider,
+		fallbackProvider: fallbackProvider,
+		rateLimiter:      rateLimiter,
+	}
+}
+
+// GetPrices retrieves prices for multiple tokens with cache-aside pattern
+// 1. First tries to get from cache
+// 2. If cache misses, goes to primary provider (CoinGecko API)
+// 3. If primary fails, goes to fallback provider (mock)
+// 4. Caches the results with 1 minute TTL
+func (s *Service) GetPrices(
+	ctx context.Context,
+	tokens []*domainToken.Token,
+	currency string,
+) (map[*domainToken.Token]*domainPrice.Price, error) {
+	if len(tokens) == 0 {
+		return make(map[*domainToken.Token]*domainPrice.Price), nil
+	}
+
+	results := make(map[*domainToken.Token]*domainPrice.Price)
+	var missedTokens []*domainToken.Token
+
+	cacheKeys := make([]string, 0, len(tokens))
+	tokenToKey := make(map[string]*domainToken.Token)
+	for _, t := range tokens {
+		key := s.cacheKey(t.ID, currency)
+		cacheKeys = append(cacheKeys, key)
+		tokenToKey[key] = t
+	}
+
+	cachedPrices := s.cache.GetBatch(ctx, cacheKeys)
+	now := time.Now()
+
+	for key, cachedPrice := range cachedPrices {
+		t := tokenToKey[key]
+		if t == nil {
+			continue
+		}
+
+		if now.Sub(cachedPrice.LastUpdated) < s.cacheTTL {
+			priceCopy := cachedPrice
+			results[t] = &priceCopy
+		} else {
+			missedTokens = append(missedTokens, t)
+		}
+	}
+
+	for _, t := range tokens {
+		if _, found := results[t]; !found {
+			missedTokens = append(missedTokens, t)
+		}
+	}
+
+	if len(missedTokens) > 0 {
+		var fetched map[*domainToken.Token]*domainPrice.Price
+		var err error
+
+		// If rate limiter is provided, check rate limit before calling primary provider
+		if s.rateLimiter != nil {
+			if err := s.rateLimiter.Allow(ctx); err == nil {
+				// Rate limit allows, try primary provider
+				fetched, err = s.primaryProvider.GetPrices(ctx, missedTokens, currency)
+			} else {
+				// Rate limit exceeded, skip primary and go to fallback
+				err = fmt.Errorf("rate limit exceeded: %w", err)
+			}
+		} else {
+			// No rate limiter, call primary provider directly
+			fetched, err = s.primaryProvider.GetPrices(ctx, missedTokens, currency)
+		}
+
+		// If primary failed or was rate limited, try fallback
+		if err != nil {
+			fetched, err = s.fallbackProvider.GetPrices(ctx, missedTokens, currency)
+			if err != nil {
+				return nil, fmt.Errorf("both primary and fallback providers failed: %w", err)
+			}
+		}
+
+		for t, p := range fetched {
+			results[t] = p
+		}
+
+		s.cacheFetchedPrices(ctx, fetched, currency)
+	}
+
+	return results, nil
+}
+
+func (s *Service) cacheKey(tokenID, currency string) string {
+	return fmt.Sprintf("%s:%s", tokenID, currency)
+}
+
+func (s *Service) cacheFetchedPrices(
+	ctx context.Context,
+	prices map[*domainToken.Token]*domainPrice.Price,
+	currency string,
+) {
+	cacheItems := make(map[string]domainPrice.Price, len(prices))
+	for t, p := range prices {
+		key := s.cacheKey(t.ID, currency)
+		cacheItems[key] = *p
+	}
+	s.cache.SetBatch(ctx, cacheItems)
 }

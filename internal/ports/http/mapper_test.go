@@ -3,6 +3,7 @@ package http
 import (
 	"math/big"
 	"testing"
+	"testtask/internal/domain/holding"
 	"testtask/internal/domain/portfolio"
 	"testtask/internal/domain/price"
 	"testtask/internal/domain/transaction"
@@ -74,8 +75,8 @@ func TestToHTTPHolding(t *testing.T) {
 		Symbol:  "BTC",
 		Address: "0xbtc",
 	}
-	holding := &portfolio.Holding{
-		ID:        "holding-1",
+	holding := &holding.Holding{
+		ID:        "holdingRepo-1",
 		Token:     token,
 		Amount:    big.NewInt(100),
 		UpdatedAt: time.Now(),
@@ -108,14 +109,14 @@ func TestToHTTPHoldings(t *testing.T) {
 		ID:     "bitcoin",
 		Symbol: "BTC",
 	}
-	holdings := []*portfolio.Holding{
+	holdings := []*holding.Holding{
 		{
-			ID:     "holding-1",
+			ID:     "holdingRepo-1",
 			Token:  token,
 			Amount: big.NewInt(100),
 		},
 		{
-			ID:     "holding-2",
+			ID:     "holdingRepo-2",
 			Token:  token,
 			Amount: big.NewInt(200),
 		},
@@ -125,8 +126,8 @@ func TestToHTTPHoldings(t *testing.T) {
 	if len(result) != 2 {
 		t.Errorf("ToHTTPHoldings() returned %d items, want 2", len(result))
 	}
-	if result[0].ID != "holding-1" {
-		t.Errorf("ToHTTPHoldings() first ID = %v, want holding-1", result[0].ID)
+	if result[0].ID != "holdingRepo-1" {
+		t.Errorf("ToHTTPHoldings() first ID = %v, want holdingRepo-1", result[0].ID)
 	}
 }
 
@@ -136,8 +137,8 @@ func TestToHTTPHoldingWithPrice(t *testing.T) {
 		Symbol:  "BTC",
 		Address: "0xbtc",
 	}
-	holding := &portfolio.Holding{
-		ID:     "holding-1",
+	holding := &holding.Holding{
+		ID:     "holdingRepo-1",
 		Token:  token,
 		Amount: big.NewInt(100),
 	}
@@ -172,9 +173,9 @@ func TestToHTTPPortfolio(t *testing.T) {
 	}
 	portfolio := &portfolio.Portfolio{
 		ID: "portfolio-1",
-		Holdings: []*portfolio.Holding{
+		Holdings: []*holding.Holding{
 			{
-				ID:     "holding-1",
+				ID:     "holdingRepo-1",
 				Token:  token,
 				Amount: big.NewInt(100),
 			},
@@ -198,10 +199,10 @@ func TestToHTTPPortfolio(t *testing.T) {
 		t.Errorf("ToHTTPPortfolio() ID = %v, want %v", result.ID, portfolio.ID)
 	}
 	if len(result.Holdings) != 1 {
-		t.Errorf("ToHTTPPortfolio() Holdings length = %v, want 1", len(result.Holdings))
+		t.Errorf("ToHTTPPortfolio() Holding length = %v, want 1", len(result.Holdings))
 	}
 	if result.Holdings[0].ValueUSD == nil {
-		t.Error("ToHTTPPortfolio() Holdings[0].ValueUSD is nil, expected calculated value")
+		t.Error("ToHTTPPortfolio() Holding[0].ValueUSD is nil, expected calculated value")
 	}
 }
 

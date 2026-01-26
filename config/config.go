@@ -11,6 +11,13 @@ type Config struct {
 	Price       PriceConfig
 	Transaction TransactionConfig
 	Database    DatabaseConfig
+	App         AppConfig
+}
+
+type AppConfig struct {
+	Environment string // "development" or "production"
+	TokensPath  string // Path to tokens JSON file
+	LogLevel    string // "debug", "info", "warn", "error"
 }
 
 type ServerConfig struct {
@@ -31,16 +38,15 @@ type PriceConfig struct {
 }
 
 type TransactionConfig struct {
-	RequestTimeout time.Duration
-	RateLimitRPS   int
+	Provider         string // "etherscan" or "mock"
+	RequestTimeout   time.Duration
+	RateLimitRPS     int
+	EtherscanAPIKey  string
+	EtherscanBaseURL string
 }
 
 type DatabaseConfig struct {
-	Host     string
-	Port     string
-	User     string
-	Password string
-	DBName   string
+	Path string // SQLite database file path
 }
 
 // Load loads configuration from environment variables
@@ -62,8 +68,19 @@ func Load() *Config {
 			FallbackEnabled: getBoolEnv("PRICE_FALLBACK_ENABLED", true),
 		},
 		Transaction: TransactionConfig{
-			RequestTimeout: getDurationEnv("TRANSACTION_REQUEST_TIMEOUT", 10*time.Second),
-			RateLimitRPS:   getIntEnv("TRANSACTION_RATE_LIMIT_RPS", 5),
+			Provider:         getEnv("TRANSACTION_PROVIDER", "etherscan"),
+			RequestTimeout:   getDurationEnv("TRANSACTION_REQUEST_TIMEOUT", 10*time.Second),
+			RateLimitRPS:     getIntEnv("TRANSACTION_RATE_LIMIT_RPS", 5),
+			EtherscanAPIKey:  getEnv("ETHERSCAN_API_KEY", ""),
+			EtherscanBaseURL: getEnv("ETHERSCAN_BASE_URL", "https://api.etherscan.io/api"),
+		},
+		Database: DatabaseConfig{
+			Path: getEnv("DB_PATH", "./data/portfolio.db"),
+		},
+		App: AppConfig{
+			Environment: getEnv("APP_ENV", "development"),
+			TokensPath:  getEnv("TOKENS_PATH", "./static/tokens.json"),
+			LogLevel:    getEnv("LOG_LEVEL", "info"),
 		},
 	}
 }

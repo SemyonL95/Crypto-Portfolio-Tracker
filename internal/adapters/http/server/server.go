@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,9 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	loggeradapter "testtask/internal/adapters/logger"
+
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	loggeradapter "testtask/internal/adapters/logger"
 	"go.uber.org/zap"
 )
 
@@ -75,7 +77,7 @@ func (s *Server) StartWithGracefulShutdown() error {
 	// Start server in a goroutine
 	go func() {
 		s.logger.Info("Starting HTTP server", zap.String("address", s.echo.Server.Addr))
-		if err := s.echo.Start(s.echo.Server.Addr); err != nil && err != http.ErrServerClosed {
+		if err := s.echo.Start(s.echo.Server.Addr); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errChan <- fmt.Errorf("server failed to start: %w", err)
 		}
 	}()

@@ -19,6 +19,7 @@ func registerRoutes(e *echo.Echo, handler *HandlerAdapter) {
 	// Portfolio endpoints
 	portfolio := v1.Group("/portfolio/:portfolioID")
 	portfolio.GET("", handler.GetPortfolio)
+	portfolio.GET("/assets", handler.GetPortfolioAssets)
 	portfolio.POST("", handler.CreatePortfolio)
 	portfolio.POST("/holdings", handler.AddHolding)
 	portfolio.PUT("/holdings/:holdingID", handler.UpdateHolding)
