@@ -1,2 +1,9 @@
 .idea
 
+# Database files
+.bin
+data/
+*.db
+*.db-shm
+*.db-wal
+
