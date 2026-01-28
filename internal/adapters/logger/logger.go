@@ -55,9 +55,19 @@ func (l *Logger) Error(msg string, fields ...zap.Field) {
 	l.logger.Error(msg, fields...)
 }
 
+// Debug logs a debug message
+func (l *Logger) Debug(msg string, fields ...zap.Field) {
+	l.logger.Debug(msg, fields...)
+}
+
 // Fatal logs a fatal message and exits
 func (l *Logger) Fatal(msg string, fields ...zap.Field) {
 	l.logger.Fatal(msg, fields...)
+}
+
+// GetZapLogger returns the underlying zap.Logger (for cases where direct zap access is needed)
+func (l *Logger) GetZapLogger() *zap.Logger {
+	return l.logger
 }
 
 // WithFields creates a child logger with additional fields

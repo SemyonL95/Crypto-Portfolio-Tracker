@@ -2,6 +2,7 @@ package transaction
 
 import (
 	"context"
+	"math/big"
 	"strings"
 	"time"
 )
@@ -37,9 +38,11 @@ type Transaction struct {
 	To           string
 	TokenAddress string
 	TokenSymbol  string
-	Amount       string
+	Amount       *big.Int // Changed from string to *big.Int
 	Type         TransactionType
 	Status       TransactionStatus
+	GasPrice     *big.Int
+	GasUsed      *big.Int
 	Method       string
 	MethodSig    string
 	Direction    TransactionDirection
@@ -47,9 +50,26 @@ type Transaction struct {
 	BlockNumber  int64
 }
 
-type FilterOptions struct {
-	Address string
+// SetDirectionForAddress sets the Direction field based on from/to address comparison.
+// This is used to determine if a transaction is incoming or outgoing for a specific address.
+func (tx *Transaction) SetDirectionForAddress(address string) {
+	if tx == nil {
+		return
+	}
+	addr := strings.ToLower(address)
+	from := strings.ToLower(tx.From)
+	to := strings.ToLower(tx.To)
 
+	switch {
+	case from == addr && to != addr:
+		tx.Direction = TransactionDirectionOut
+	case to == addr && from != addr:
+		tx.Direction = TransactionDirectionIn
+	}
+}
+
+type FilterOptions struct {
+	Address   string // Address to filter by (used for direction calculation)
 	Type      *TransactionType
 	Status    *TransactionStatus
 	Token     *string // Token address or symbol
@@ -62,129 +82,63 @@ type FilterOptions struct {
 }
 
 type TransactionResult struct {
-	Transactions []Transaction
+	Transactions Transactions
 	Total        int
 	Page         int
 	PageSize     int
 	TotalPages   int
 }
 
-type Repository interface {
-	// GetTransactionsByAddress returns paginated transactions for an address
-	GetTransactionsByAddress(ctx context.Context, address string, opts FilterOptions) (*TransactionResult, error)
-	// GetAllTransactionsByAddress returns all transactions for an address (no pagination)
-	GetAllTransactionsByAddress(ctx context.Context, address string, opts FilterOptions) ([]Transaction, error)
-	GetTransactionByHash(ctx context.Context, hash string) (*Transaction, error)
-	GetTokenBalances(ctx context.Context, address string) (map[string]string, error) // token address -> balance
+type Provider interface {
+	NativeTxsByAddress(ctx context.Context, address string, opts FilterOptions) ([]*Transaction, error)
+	TokenTxsByAddress(ctx context.Context, address string, opts FilterOptions) ([]*Transaction, error)
+	InternalTxsByAddress(ctx context.Context, address string, opts FilterOptions) ([]*Transaction, error)
 }
 
-// ExtractMethodSignature extracts the method signature (first 4 bytes) from transaction input data
-// Input format: "0x" + 4 bytes (8 hex chars) + data
-// Returns the first 4 bytes (8 hex characters after "0x") in lowercase, or empty string if invalid
-func (tx *Transaction) ExtractMethodSignature(input string) string {
-	if len(input) < 10 {
-		return ""
-	}
-	// Return first 4 bytes (8 hex characters after "0x")
-	return strings.ToLower(input[:10])
+type AggregatedData struct {
+	Address            string
+	Transactions       []Transaction
+	ETHBalance         *big.Int
+	CalculatedBalances map[string]*big.Int
 }
 
-// ClassifyType classifies transaction type based on method signature and input data
-// It recognizes common ERC-20 methods, DeFi swap methods, and staking methods
-func (tx *Transaction) ClassifyType(input string) TransactionType {
-	// Use tx.MethodSig if available, otherwise extract from input
-	methodSig := tx.MethodSig
-	if methodSig == "" && input != "" {
-		methodSig = tx.ExtractMethodSignature(input)
+type Transactions []*Transaction
+
+// CalculateTokensAmounts calculates token balances derived only from
+// transaction history. The map key is the token contract address
+// (empty string for native token). Positive values mean net incoming
+// funds, negative values mean net outgoing funds.
+// Uses integer arithmetic only (big.Int).
+func (ts *Transactions) CalculateTokensAmounts() (map[string]*big.Int, error) {
+	if ts == nil {
+		return map[string]*big.Int{}, nil
 	}
 
-	// Common ERC-20 method signatures
-	transferSig := "0xa9059cbb"     // transfer(address,uint256)
-	transferFromSig := "0x23b872dd" // transferFrom(address,address,uint256)
-	// approveSig := "0x095ea7b3"   // approve(address,uint256) - not used in classification
+	balances := make(map[string]*big.Int)
 
-	// Swap method signatures (DeFi)
-	swapSig := "0x7ff36ab5"  // swapExactETHForTokens (Uniswap V2)
-	swapSig2 := "0x02751cec" // swap (Uniswap V3)
-	swapSig3 := "0x38ed1739" // swapExactTokensForTokens (Uniswap V2)
-	swapSig4 := "0x8803dbee" // swapTokensForExactTokens (Uniswap V2)
-	swapSig5 := "0x4a25d94a" // swapETHForExactTokens (Uniswap V2)
-	swapSig6 := "0x791ac947" // swapExactTokensForETH (Uniswap V2)
-	swapSig7 := "0x414bf389" // exactInputSingle (Uniswap V3)
-	swapSig8 := "0xdb3e2198" // exactInput (Uniswap V3)
-	swapSig9 := "0x5c11d795" // swapExactTokensForTokensSupportingFeeOnTransferTokens (Uniswap V2)
-
-	// Staking method signatures
-	stakeSig := "0x3d18b912"    // stake(uint256)
-	depositSig := "0xb6b55f25"  // deposit(uint256) - common staking pattern
-	stakeSig2 := "0x1249c58b"   // stake() - no parameters
-	depositSig2 := "0xd0e30db0" // deposit() - payable
-	depositSig3 := "0x47e7ef24" // deposit(uint256,address) - with recipient
-
-	methodSig = strings.ToLower(methodSig)
-
-	switch methodSig {
-	case transferSig, transferFromSig:
-		return TransactionTypeSend
-	case swapSig, swapSig2, swapSig3, swapSig4, swapSig5, swapSig6, swapSig7, swapSig8, swapSig9:
-		return TransactionTypeSwap
-	case stakeSig, depositSig, stakeSig2, depositSig2, depositSig3:
-		return TransactionTypeStake
-	default:
-		if input == "" || input == "0x" {
-			return TransactionTypeSend
+	for _, tx := range *ts {
+		if tx == nil || tx.Amount == nil {
+			continue
 		}
-		return TransactionTypeSend
-	}
-}
 
-func (tx *Transaction) DetectDirection(address string) TransactionDirection {
-	from := strings.ToLower(tx.From)
-	to := strings.ToLower(tx.To)
-	address = strings.ToLower(address)
+		// Skip transactions with unknown direction to avoid corrupting balances
+		if tx.Direction == "" {
+			continue
+		}
 
-	if from == address {
-		return TransactionDirectionOut
-	}
-	if to == address {
-		return TransactionDirectionIn
-	}
-	// Default to out if neither matches (shouldn't happen in normal flow)
-	return TransactionDirectionOut
-}
+		tokenKey := strings.ToLower(tx.TokenAddress)
 
-func (tx *Transaction) MethodName() string {
-	methodMap := map[string]string{
-		// ERC-20 methods
-		"0xa9059cbb": "transfer",
-		"0x23b872dd": "transferFrom",
-		"0x095ea7b3": "approve",
-		// Swap methods
-		"0x7ff36ab5": "swapExactETHForTokens",
-		"0x02751cec": "swap",
-		"0x38ed1739": "swapExactTokensForTokens",
-		"0x8803dbee": "swapTokensForExactTokens",
-		"0x4a25d94a": "swapETHForExactTokens",
-		"0x791ac947": "swapExactTokensForETH",
-		"0x414bf389": "exactInputSingle",
-		"0xdb3e2198": "exactInput",
-		"0x5c11d795": "swapExactTokensForTokensSupportingFeeOnTransferTokens",
-		// Staking methods
-		"0x3d18b912": "stake",
-		"0xb6b55f25": "deposit",
-		"0x1249c58b": "stake",
-		"0xd0e30db0": "deposit",
-		"0x47e7ef24": "deposit",
+		if _, exists := balances[tokenKey]; !exists {
+			balances[tokenKey] = big.NewInt(0)
+		}
+
+		switch tx.Direction {
+		case TransactionDirectionIn:
+			balances[tokenKey].Add(balances[tokenKey], tx.Amount)
+		case TransactionDirectionOut:
+			balances[tokenKey].Sub(balances[tokenKey], tx.Amount)
+		}
 	}
 
-	methodSig := strings.ToLower(tx.MethodSig)
-	if name, ok := methodMap[methodSig]; ok {
-		return name
-	}
-
-	if tx.MethodSig == "" || tx.MethodSig == "0x" {
-		return "transfer"
-	}
-
-	return "unknown"
+	return balances, nil
 }

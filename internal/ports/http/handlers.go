@@ -2,9 +2,9 @@ package http
 
 import (
 	"context"
+	"fmt"
 	"math/big"
-	portfolioService "testtask/internal/application/portfolio"
-	"testtask/internal/domain/holding"
+	domainHolding "testtask/internal/domain/holding"
 	domainPortfolio "testtask/internal/domain/portfolio"
 	"testtask/internal/domain/price"
 	"testtask/internal/domain/token"
@@ -23,12 +23,9 @@ type TransactionFilters struct {
 	PageSize int        `json:"page_size"`
 }
 
+// TransactionService defines the interface for transaction operations.
 type TransactionService interface {
-	// GetTransactions returns paginated transactions for an address
-	GetTransactions(ctx context.Context, filters TransactionFilters) ([]transaction.Transaction, int, error)
-	// GetAllTransactions returns all transactions for an address without pagination
-	GetAllTransactions(ctx context.Context, filters TransactionFilters) ([]transaction.Transaction, error)
-	GetTransactionByHash(ctx context.Context, hash string) (*transaction.Transaction, error)
+	GetTransactions(ctx context.Context, address string, opts transaction.FilterOptions) ([]transaction.Transaction, int, error)
 }
 
 type PriceService interface {
@@ -36,12 +33,13 @@ type PriceService interface {
 }
 
 type PortfolioService interface {
+	ListPortfolios(ctx context.Context) ([]*domainPortfolio.Portfolio, error)
 	CreatePortfolio(ctx context.Context, portfolio *domainPortfolio.Portfolio) error
 	GetPortfolio(ctx context.Context, portfolioID string) (*domainPortfolio.Portfolio, error)
-	AddHolding(ctx context.Context, userID string, holding *holding.Holding) error
+	AddHolding(ctx context.Context, userID string, holding *domainHolding.Holding) error
 	UpdateHolding(ctx context.Context, userID string, holdingID string, amount *big.Int) error
 	DeleteHolding(ctx context.Context, userID string, holdingID string) error
-	GetPortfolioAssets(ctx context.Context, portfolioID string, currency string) (*portfolioService.PortfolioAssets, error)
+	GetPortfolioAssets(ctx context.Context, portfolioID string, currency string) (*domainPortfolio.Portfolio, []*domainPortfolio.Asset, error)
 }
 
 type TokensService interface {
@@ -58,32 +56,77 @@ type Transaction struct {
 	Amount       string    `json:"amount"`
 	Type         string    `json:"type"`
 	Status       string    `json:"status"`
+	Direction    string    `json:"direction"`
 	Method       string    `json:"method"`
 	Timestamp    time.Time `json:"timestamp"`
 	BlockNumber  int64     `json:"block_number"`
 }
 
 type Holding struct {
-	ID           string    `json:"id"`
-	TokenAddress string    `json:"token_address"`
-	TokenSymbol  string    `json:"token_symbol"`
-	Amount       *big.Int  `json:"amount"`
-	ValueUSD     *big.Int  `json:"value_usd"`
-	PriceUSD     *big.Int  `json:"price_usd"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           string   `json:"id"`
+	TokenAddress string   `json:"token_address"`
+	TokenSymbol  string   `json:"token_symbol"`
+	Amount       *big.Int `json:"amount"`
+}
+
+// ToDomainFilterOptions maps HTTP transaction filters to domain filter options.
+func ToDomainFilterOptions(f TransactionFilters) (transaction.FilterOptions, error) {
+	var opts transaction.FilterOptions
+
+	if f.Address != nil {
+		opts.Address = *f.Address
+	}
+
+	if f.Type != nil && *f.Type != "" {
+		t := transaction.TransactionType(*f.Type)
+		switch t {
+		case transaction.TransactionTypeSend,
+			transaction.TransactionTypeReceive,
+			transaction.TransactionTypeSwap,
+			transaction.TransactionTypeStake:
+			opts.Type = &t
+		default:
+			return opts, fmt.Errorf("invalid transaction type: %s", *f.Type)
+		}
+	}
+
+	if f.Status != nil && *f.Status != "" {
+		s := transaction.TransactionStatus(*f.Status)
+		switch s {
+		case transaction.TransactionStatusPending,
+			transaction.TransactionStatusSuccess,
+			transaction.TransactionStatusFailed:
+			opts.Status = &s
+		default:
+			return opts, fmt.Errorf("invalid transaction status: %s", *f.Status)
+		}
+	}
+
+	if f.Token != nil && *f.Token != "" {
+		opts.Token = f.Token
+	}
+	if f.FromDate != nil {
+		opts.FromDate = f.FromDate
+	}
+	if f.ToDate != nil {
+		opts.ToDate = f.ToDate
+	}
+
+	opts.Page = f.Page
+	opts.PageSize = f.PageSize
+
+	return opts, nil
 }
 
 type Portfolio struct {
-	ID        string     `json:"id"`
-	Holdings  []*Holding `json:"holdingRepo"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	ID       string     `json:"id"`
+	Holdings []*Holding `json:"holdingRepo"`
 }
 
 type Price struct {
-	TokenID     string  `json:"token_id"`
-	Symbol      string  `json:"symbol"`
-	PriceUSD    float64 `json:"price_usd"`
-	LastUpdated int64   `json:"last_updated"`
+	TokenID  string  `json:"token_id"`
+	Symbol   string  `json:"symbol"`
+	PriceUSD float64 `json:"price_usd"`
 }
 
 type ErrorResponse struct {
@@ -101,11 +144,11 @@ type PaginatedResponse struct {
 
 // Asset represents an asset in the portfolio with its value
 type Asset struct {
-	Token       *TokenInfo `json:"token"`
-	Amount      *big.Int   `json:"amount"`
-	PriceUSD    *big.Int   `json:"price_usd"`
-	ValueUSD    *big.Int   `json:"value_usd"`
-	Source      string     `json:"source"` // "holding" or "transaction"
+	Token    *TokenInfo `json:"token"`
+	Amount   *big.Int   `json:"amount"`
+	PriceUSD float64    `json:"price_usd"`
+	ValueUSD float64    `json:"value_usd"`
+	Source   string     `json:"source"` // "holding" or "transaction"
 }
 
 // TokenInfo represents token information in the response
@@ -119,10 +162,7 @@ type TokenInfo struct {
 
 // PortfolioAssets represents all assets in a portfolio with their values
 type PortfolioAssets struct {
-	PortfolioID  string    `json:"portfolio_id"`
-	Address      string    `json:"address"`
-	Assets       []*Asset  `json:"assets"`
-	TotalValue   *big.Int  `json:"total_value"`
-	Currency     string    `json:"currency"`
-	CalculatedAt time.Time `json:"calculated_at"`
+	PortfolioID string   `json:"portfolio_id"`
+	Address     string   `json:"address"`
+	Assets      []*Asset `json:"assets"`
 }

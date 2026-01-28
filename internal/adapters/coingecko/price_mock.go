@@ -2,7 +2,6 @@ package coingecko
 
 import (
 	"context"
-	"fmt"
 	"math/big"
 	"math/rand"
 	"testtask/internal/domain/price"
@@ -43,9 +42,8 @@ func (p *MockProvider) addPriceVariation(basePrice float64) float64 {
 
 func convertFloatToBigInt(value float64, decimals int) *big.Int {
 	multiplier := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil)
-	// Convert float to string with enough precision, then to big.Float
-	valueStr := fmt.Sprintf("%.8f", value)
-	valueFloat, _, _ := big.ParseFloat(valueStr, 10, 256, big.ToNearestEven)
+	// Convert float to big.Float directly to preserve precision
+	valueFloat := new(big.Float).SetFloat64(value)
 	multiplierFloat := new(big.Float).SetInt(multiplier)
 	resultFloat := new(big.Float).Mul(valueFloat, multiplierFloat)
 	result, _ := resultFloat.Int(nil)

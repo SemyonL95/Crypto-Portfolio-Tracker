@@ -7,18 +7,16 @@ import (
 	"math/big"
 	"testtask/internal/domain/holding"
 	"testtask/internal/domain/portfolio"
-	"testtask/internal/domain/price"
+	"testtask/internal/domain/token"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// SQLiteRepository implements portfolio.Repository using SQLite
 type SQLiteRepository struct {
 	db *sql.DB
 }
 
-// NewSQLiteRepository creates a new SQLite portfolio repository
 func NewSQLiteRepository(dbPath string) (*SQLiteRepository, error) {
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
@@ -30,7 +28,6 @@ func NewSQLiteRepository(dbPath string) (*SQLiteRepository, error) {
 	return repo, nil
 }
 
-// GetByID retrieves a portfolio by portfolio ID
 func (r *SQLiteRepository) GetByID(ctx context.Context, portfolioID string) (*portfolio.Portfolio, error) {
 	query := `
 		SELECT id, address, updated_at
@@ -68,7 +65,6 @@ func (r *SQLiteRepository) GetByID(ctx context.Context, portfolioID string) (*po
 	return &p, nil
 }
 
-// GetByIDWithHoldings retrieves a portfolio by portfolio ID with its holdings loaded
 func (r *SQLiteRepository) GetByIDWithHoldings(ctx context.Context, portfolioID string) (*portfolio.Portfolio, error) {
 	// First get the portfolio
 	p, err := r.GetByID(ctx, portfolioID)
@@ -88,7 +84,6 @@ func (r *SQLiteRepository) GetByIDWithHoldings(ctx context.Context, portfolioID 
 	return p, nil
 }
 
-// GetByAddress retrieves a portfolio by address
 func (r *SQLiteRepository) GetByAddress(ctx context.Context, address string) (*portfolio.Portfolio, error) {
 	query := `
 		SELECT id, address, updated_at
@@ -126,7 +121,6 @@ func (r *SQLiteRepository) GetByAddress(ctx context.Context, address string) (*p
 	return &p, nil
 }
 
-// Create saves a new portfolio
 func (r *SQLiteRepository) Create(ctx context.Context, p *portfolio.Portfolio) error {
 	// Check if address is already used by a different portfolio
 	checkQuery := `SELECT id FROM portfolios WHERE address = ? AND id != ?`
@@ -161,7 +155,6 @@ func (r *SQLiteRepository) Create(ctx context.Context, p *portfolio.Portfolio) e
 	return nil
 }
 
-// List retrieves all portfolios
 func (r *SQLiteRepository) List(ctx context.Context) ([]*portfolio.Portfolio, error) {
 	query := `
 		SELECT id, address, updated_at
@@ -206,7 +199,6 @@ func (r *SQLiteRepository) List(ctx context.Context) ([]*portfolio.Portfolio, er
 	return portfolios, nil
 }
 
-// ListWithHoldings retrieves all portfolios with their holdings loaded in a single query
 func (r *SQLiteRepository) ListWithHoldings(ctx context.Context) ([]*portfolio.Portfolio, error) {
 	query := `
 		SELECT 
@@ -224,7 +216,6 @@ func (r *SQLiteRepository) ListWithHoldings(ctx context.Context) ([]*portfolio.P
 	}
 	defer rows.Close()
 
-	// Map to track portfolios by ID and slice to maintain order
 	portfolioMap := make(map[string]*portfolio.Portfolio)
 	var portfolios []*portfolio.Portfolio
 
@@ -284,7 +275,7 @@ func (r *SQLiteRepository) ListWithHoldings(ctx context.Context) ([]*portfolio.P
 			}
 
 			// Reconstruct Token
-			holding.Token = &price.Token{
+			holding.Token = &token.Token{
 				ID:      tokenID.String,
 				Symbol:  tokenSymbol.String,
 				Address: tokenAddress.String,
@@ -363,7 +354,7 @@ func (r *SQLiteRepository) loadHoldings(ctx context.Context, portfolioID string)
 		}
 
 		// Reconstruct Token
-		h.Token = &price.Token{
+		h.Token = &token.Token{
 			ID:      tokenID,
 			Symbol:  tokenSymbol,
 			Address: tokenAddress,
@@ -441,7 +432,7 @@ func (r *SQLiteRepository) GetHolding(ctx context.Context, portfolioID string, h
 	}
 
 	// Reconstruct Token
-	h.Token = &price.Token{
+	h.Token = &token.Token{
 		ID:      tokenID,
 		Symbol:  tokenSymbol,
 		Address: tokenAddress,

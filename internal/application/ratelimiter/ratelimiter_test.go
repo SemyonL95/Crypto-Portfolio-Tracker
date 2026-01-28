@@ -69,7 +69,7 @@ func TestNewRateLimiter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rl := NewRateLimiter(tt.maxCalls, tt.windowDuration)
+			rl := NewRateLimiter(tt.maxCalls, tt.windowDuration, nil)
 			if rl.maxCalls != tt.wantMaxCalls {
 				t.Errorf("NewRateLimiter() maxCalls = %d, want %d", rl.maxCalls, tt.wantMaxCalls)
 			}
@@ -144,7 +144,7 @@ func TestRateLimiter_Allow(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rl := NewRateLimiter(tt.maxCalls, tt.windowDuration)
+			rl := NewRateLimiter(tt.maxCalls, tt.windowDuration, nil)
 			ctx := context.Background()
 			errors := 0
 			successes := 0
@@ -207,7 +207,7 @@ func TestRateLimiter_Allow_Concurrent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rl := NewRateLimiter(tt.maxCalls, tt.windowDuration)
+			rl := NewRateLimiter(tt.maxCalls, tt.windowDuration, nil)
 			ctx := context.Background()
 			var wg sync.WaitGroup
 			errorsChan := make(chan error, tt.numCalls)
@@ -272,7 +272,7 @@ func TestRateLimiter_Allow_Context(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rl := NewRateLimiter(10, time.Minute)
+			rl := NewRateLimiter(10, time.Minute, nil)
 			ctx := context.Background()
 			if tt.cancelCtx {
 				var cancel context.CancelFunc
@@ -289,7 +289,7 @@ func TestRateLimiter_Allow_Context(t *testing.T) {
 }
 
 func TestRateLimiter_Allow_SequentialBursts(t *testing.T) {
-	rl := NewRateLimiter(3, time.Minute)
+		rl := NewRateLimiter(3, time.Minute, nil)
 	ctx := context.Background()
 
 	for i := 0; i < 3; i++ {
@@ -304,7 +304,7 @@ func TestRateLimiter_Allow_SequentialBursts(t *testing.T) {
 }
 
 func TestRateLimiter_Allow_RapidCalls(t *testing.T) {
-	rl := NewRateLimiter(5, time.Minute)
+	rl := NewRateLimiter(5, time.Minute, nil)
 	ctx := context.Background()
 
 	errors := 0
@@ -327,8 +327,8 @@ func TestRateLimiter_Allow_RapidCalls(t *testing.T) {
 
 func TestRateLimiter_Allow_MultipleInstances(t *testing.T) {
 	// Test that different rate limiter instances don't interfere
-	rl1 := NewRateLimiter(3, time.Minute)
-	rl2 := NewRateLimiter(5, time.Minute)
+	rl1 := NewRateLimiter(3, time.Minute, nil)
+	rl2 := NewRateLimiter(5, time.Minute, nil)
 	ctx := context.Background()
 
 	// Both should work independently
@@ -354,7 +354,7 @@ func TestRateLimiter_Allow_MultipleInstances(t *testing.T) {
 
 func TestRateLimiter_Allow_CustomDuration(t *testing.T) {
 	// Test with a 2-second window
-	rl := NewRateLimiter(3, 2*time.Second)
+	rl := NewRateLimiter(3, 2*time.Second, nil)
 	ctx := context.Background()
 
 	// Should allow 3 calls

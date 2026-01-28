@@ -50,6 +50,10 @@ func (r *MockTokenRepository) GetByAddress(ctx context.Context, address string) 
 	return t, nil
 }
 
+func (r *MockTokenRepository) GetByAddresses(ctx context.Context, addresses []string) map[string]*token.Token {
+	return r.addressCache.GetBatch(ctx, addresses)
+}
+
 // loadTokensFromFile loads tokens from a JSON file
 func loadTokensFromFile(path string) ([]*token.Token, error) {
 	filePath := path

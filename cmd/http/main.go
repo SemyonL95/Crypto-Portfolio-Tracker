@@ -43,6 +43,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
+
 	defer func() {
 		if err := logger.Sync(); err != nil {
 			// Ignore sync errors on exit
@@ -100,6 +101,7 @@ func main() {
 	priceRateLimiter := ratelimiter.NewRateLimiter(
 		cfg.Price.RateLimitRPS,
 		time.Second, // 1 second window
+		logger,
 	)
 
 	// Initialize price service
@@ -110,7 +112,7 @@ func main() {
 	// Note: The price service requires a non-nil fallback provider
 	// If fallback is disabled, we still provide the mock but it won't be used
 	// unless the primary provider fails
-	var fallbackProvider domainPrice.Provider = mockPriceProvider
+	var fallbackProvider domainPrice.PriceProvider = mockPriceProvider
 	if cfg.Price.FallbackEnabled {
 		logger.Info("Price fallback enabled", zap.String("provider", "mock"))
 	} else {
@@ -122,6 +124,7 @@ func main() {
 		coingeckoPriceProvider,
 		fallbackProvider,
 		priceRateLimiter,
+		logger,
 	)
 
 	// Initialize Etherscan client
@@ -135,6 +138,7 @@ func main() {
 	transactionRateLimiter := ratelimiter.NewRateLimiter(
 		cfg.Transaction.RateLimitRPS,
 		time.Second, // 1 second window
+		logger,
 	)
 
 	// Initialize Etherscan transaction provider
@@ -145,7 +149,7 @@ func main() {
 	}
 
 	// Initialize transaction service
-	transactionService := transactionservice.NewService(transactionRepo)
+	transactionService := transactionservice.NewService(transactionRepo, logger)
 
 	// Initialize token repository (mock - loads from static file)
 	tokenRepo, err := initializeTokenRepository(cfg, logger)
@@ -157,10 +161,7 @@ func main() {
 	tokenService := &TokenServiceAdapter{repo: tokenRepo}
 
 	// Initialize portfolio service
-	portfolioService := portfolioservice.NewService(portfolioRepo, priceService)
-	portfolioService.SetHoldingRepo(holdingRepo)
-	portfolioService.SetTransactionRepo(transactionRepo)
-
+	portfolioService := portfolioservice.NewService(portfolioRepo, holdingRepo, transactionRepo, tokenRepo, priceService, logger)
 	// Initialize HTTP handler adapter
 	handlerAdapter := httpserver.NewHandlerAdapter(
 		transactionService,

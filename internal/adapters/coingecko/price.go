@@ -53,7 +53,7 @@ func (a *PriceRepository) GetPrices(
 		var batch []string
 
 		for _, token := range batchTokens {
-			batch = append(batch, token.ID)
+			batch = append(batch, token.Address)
 		}
 
 		batchResults, err := a.fetchPricesBatch(ctx, batch, currency, tokenMap)
@@ -77,7 +77,7 @@ func (a *PriceRepository) fetchPricesBatch(
 	tokenMap map[string]*token.Token,
 ) (map[*token.Token]*price.Price, error) {
 	idsParam := strings.Join(tokenIDs, ",")
-	path := fmt.Sprintf("/simple/token_price?ids=%s&vs_currencies=%s&include_last_updated_at=true&include_tokens=all&precision=8", idsParam, currency)
+	path := fmt.Sprintf("/simple/token_price/ethereum?contract_addresses=%s&vs_currencies=%s&include_last_updated_at=true&include_tokens=all&precision=8", idsParam, currency)
 
 	var data CoinGeckoSimplePriceResponse
 
@@ -89,13 +89,13 @@ func (a *PriceRepository) fetchPricesBatch(
 	results := make(map[*token.Token]*price.Price)
 	for tokenID, priceData := range data {
 		if priceValue, ok := priceData[currency]; ok {
-			t, ok := tokenMap[tokenID]
+			t, ok := tokenMap[strings.ToUpper(tokenID)]
 			if !ok {
 				symbol := a.getSymbolFromID(tokenID)
 				t = &token.Token{
-					ID:     tokenID,
-					Symbol: symbol,
-					//Address:
+					ID:      tokenID,
+					Symbol:  symbol,
+					Address: strings.ToUpper(tokenID),
 				}
 			}
 

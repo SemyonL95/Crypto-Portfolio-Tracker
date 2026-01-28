@@ -8,7 +8,6 @@ import (
 	"testtask/internal/adapters/logger"
 	"testtask/internal/domain/holding"
 	"testtask/internal/domain/portfolio"
-	"testtask/internal/domain/token"
 	"time"
 
 	httpports "testtask/internal/ports/http"
@@ -64,16 +63,9 @@ func (h *HandlerAdapter) CreatePortfolio(c echo.Context) error {
 		})
 	}
 
-	// GetByID portfolioID from path parameter
-	portfolioID := c.Param("portfolioID")
-
 	// Create holding portfolio
-	domainPortfolio := &portfolio.Portfolio{
-		ID:      portfolioID,
-		Address: req.Address,
-	}
-
-	if err := h.portfolioService.CreatePortfolio(c.Request().Context(), domainPortfolio); err != nil {
+	newPortfolio := portfolio.NewPortfolio("", req.Address)
+	if err := h.portfolioService.CreatePortfolio(c.Request().Context(), newPortfolio); err != nil {
 		if errors.Is(err, portfolio.ErrPortfolioAddressExists) {
 			h.logger.Warn("Portfolio creation failed: address exists", zap.String("address", req.Address), zap.Error(err))
 			return c.JSON(http.StatusConflict, httpports.ErrorResponse{
@@ -81,22 +73,24 @@ func (h *HandlerAdapter) CreatePortfolio(c echo.Context) error {
 				Message: err.Error(),
 			})
 		}
+
 		if errors.Is(err, portfolio.ErrPortfolioNotFound) {
-			h.logger.Warn("Portfolio creation failed: not found", zap.String("portfolioID", portfolioID), zap.Error(err))
+			h.logger.Warn("Portfolio creation failed: not found", zap.String("portfolioID", newPortfolio.ID), zap.Error(err))
 			return c.JSON(http.StatusBadRequest, httpports.ErrorResponse{
 				Error:   "Bad Request",
 				Message: err.Error(),
 			})
 		}
-		h.logger.Error("Portfolio creation failed", zap.String("portfolioID", portfolioID), zap.Error(err))
+
+		h.logger.Error("Portfolio creation failed", zap.String("portfolioID", newPortfolio.ID), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, httpports.ErrorResponse{
 			Error:   "Internal Server Error",
 			Message: err.Error(),
 		})
 	}
 
-	if portfolioID != "" {
-		createdPortfolio, err := h.portfolioService.GetPortfolio(c.Request().Context(), portfolioID)
+	if newPortfolio.ID != "" {
+		createdPortfolio, err := h.portfolioService.GetPortfolio(c.Request().Context(), newPortfolio.ID)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, httpports.ErrorResponse{
 				Error:   "Internal Server Error",
@@ -104,7 +98,7 @@ func (h *HandlerAdapter) CreatePortfolio(c echo.Context) error {
 			})
 		}
 		// Return the created portfolio without prices for creation response
-		return c.JSON(http.StatusCreated, httpports.ToHTTPPortfolio(createdPortfolio, nil))
+		return c.JSON(http.StatusCreated, httpports.ToHTTPPortfolio(createdPortfolio))
 	}
 
 	return c.JSON(http.StatusCreated, map[string]interface{}{
@@ -114,38 +108,45 @@ func (h *HandlerAdapter) CreatePortfolio(c echo.Context) error {
 }
 
 func (h *HandlerAdapter) GetPortfolio(c echo.Context) error {
-	portofolioID := c.Param("portofolioID")
+	portofolioID := c.Param("portfolioID")
 	if portofolioID == "" {
 		return c.JSON(http.StatusBadRequest, httpports.ErrorResponse{
 			Error:   "Bad Request",
-			Message: "portofolioID is required",
+			Message: "portfolioID is required",
 		})
 	}
 
-	portfolio, err := h.portfolioService.GetPortfolio(c.Request().Context(), portofolioID)
+	p, err := h.portfolioService.GetPortfolio(c.Request().Context(), portofolioID)
 	if err != nil {
-		h.logger.Error("Failed to get portfolio", zap.String("portfolioID", portofolioID), zap.Error(err))
+		h.logger.Error("Failed to get p", zap.String("portfolioID", portofolioID), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, httpports.ErrorResponse{
 			Error:   "Internal Server Error",
 			Message: err.Error(),
 		})
 	}
 
-	var tokens []*token.Token
-	for _, holding := range portfolio.Holdings {
-		tokens = append(tokens, holding.Token)
+	return c.JSON(http.StatusOK, httpports.ToHTTPPortfolio(p))
+}
+
+func (h *HandlerAdapter) GetPortfolioList(c echo.Context) error {
+	portofolioID := c.Param("portfolioID")
+	if portofolioID == "" {
+		return c.JSON(http.StatusBadRequest, httpports.ErrorResponse{
+			Error:   "Bad Request",
+			Message: "portfolioID is required",
+		})
 	}
 
-	prices, err := h.priceService.GetPrices(c.Request().Context(), tokens, "usd")
+	p, err := h.portfolioService.ListPortfolios(c.Request().Context())
 	if err != nil {
-		h.logger.Error("Failed to get prices", zap.String("portfolioID", portofolioID), zap.Error(err))
+		h.logger.Error("Failed to get p", zap.String("portfolioID", portofolioID), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, httpports.ErrorResponse{
 			Error:   "Internal Server Error",
 			Message: err.Error(),
 		})
 	}
 
-	return c.JSON(http.StatusOK, httpports.ToHTTPPortfolio(portfolio, prices))
+	return c.JSON(http.StatusOK, httpports.ToHTTPPortfolios(p))
 }
 
 // AddHolding handles POST /api/v1/portfolio/:portofolioID/holdingRepo
@@ -294,7 +295,17 @@ func (h *HandlerAdapter) GetTransactions(c echo.Context) error {
 		}
 	}
 
-	transactions, total, err := h.transactionService.GetTransactions(c.Request().Context(), filters)
+	// Map HTTP filters to domain filter options.
+	opts, err := httpports.ToDomainFilterOptions(filters)
+	if err != nil {
+		h.logger.Error("Invalid transaction filters", zap.Any("filters", filters), zap.Error(err))
+		return c.JSON(http.StatusBadRequest, httpports.ErrorResponse{
+			Error:   "Bad Request",
+			Message: err.Error(),
+		})
+	}
+
+	transactions, total, err := h.transactionService.GetTransactions(c.Request().Context(), addressParam, opts)
 	if err != nil {
 		h.logger.Error("Failed to get transactions", zap.Any("filters", filters), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, httpports.ErrorResponse{
@@ -304,8 +315,12 @@ func (h *HandlerAdapter) GetTransactions(c echo.Context) error {
 	}
 
 	totalPages := (total + filters.PageSize - 1) / filters.PageSize
+	if totalPages < 1 {
+		totalPages = 1
+	}
+
 	response := httpports.PaginatedResponse{
-		Data:       httpports.ToHTTPTransactions(transactions),
+		Data:       httpports.ToHTTPTransactionsFromSlice(transactions),
 		Page:       filters.Page,
 		PageSize:   filters.PageSize,
 		Total:      total,
@@ -330,7 +345,7 @@ func (h *HandlerAdapter) GetPortfolioAssets(c echo.Context) error {
 		currency = "usd"
 	}
 
-	assets, err := h.portfolioService.GetPortfolioAssets(c.Request().Context(), portfolioID, currency)
+	p, assets, err := h.portfolioService.GetPortfolioAssets(c.Request().Context(), portfolioID, currency)
 	if err != nil {
 		if errors.Is(err, portfolio.ErrPortfolioNotFound) {
 			h.logger.Warn("Portfolio not found", zap.String("portfolioID", portfolioID), zap.Error(err))
@@ -339,6 +354,7 @@ func (h *HandlerAdapter) GetPortfolioAssets(c echo.Context) error {
 				Message: err.Error(),
 			})
 		}
+
 		h.logger.Error("Failed to get portfolio assets", zap.String("portfolioID", portfolioID), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, httpports.ErrorResponse{
 			Error:   "Internal Server Error",
@@ -346,7 +362,7 @@ func (h *HandlerAdapter) GetPortfolioAssets(c echo.Context) error {
 		})
 	}
 
-	return c.JSON(http.StatusOK, httpports.ToHTTPPortfolioAssets(assets))
+	return c.JSON(http.StatusOK, httpports.ToHTTPPortfolioAssets(p, assets))
 }
 
 func (h *HandlerAdapter) HealthCheck(c echo.Context) error {

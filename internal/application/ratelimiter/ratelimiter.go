@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"sync"
+	loggeradapter "testtask/internal/adapters/logger"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 var (
@@ -12,8 +15,6 @@ var (
 	ErrRateLimitExceeded = errors.New("rate limit exceeded")
 )
 
-// RateLimiter is a generic rate limiter that limits calls within a time window
-// It uses a token bucket algorithm with a sliding window approach
 type RateLimiter struct {
 	mu              sync.Mutex
 	maxCalls        int
@@ -21,22 +22,30 @@ type RateLimiter struct {
 	callTimestamps  []time.Time
 	cleanupInterval time.Duration
 	lastCleanup     time.Time
+	logger          *loggeradapter.Logger
 }
 
-// NewRateLimiter creates a new rate limiter with the specified max calls and window duration
-func NewRateLimiter(maxCalls int, windowDuration time.Duration) *RateLimiter {
+func NewRateLimiter(maxCalls int, windowDuration time.Duration, logger *loggeradapter.Logger) *RateLimiter {
 	if maxCalls <= 0 {
 		maxCalls = 1 // Minimum 1 call
 	}
 	if windowDuration <= 0 {
 		windowDuration = time.Minute // Default to 1 minute
 	}
+	if logger == nil {
+		logger = loggeradapter.NewNopLogger()
+	}
 
-	// Set cleanup interval to 10% of window duration, but at least 1 second
 	cleanupInterval := windowDuration / 10
 	if cleanupInterval < time.Second {
 		cleanupInterval = time.Second
 	}
+
+	logger.Info("Rate limiter created",
+		zap.Int("max_calls", maxCalls),
+		zap.Duration("window_duration", windowDuration),
+		zap.Duration("cleanup_interval", cleanupInterval),
+	)
 
 	return &RateLimiter{
 		maxCalls:        maxCalls,
@@ -44,6 +53,7 @@ func NewRateLimiter(maxCalls int, windowDuration time.Duration) *RateLimiter {
 		callTimestamps:  make([]time.Time, 0, maxCalls),
 		cleanupInterval: cleanupInterval,
 		lastCleanup:     time.Now(),
+		logger:          logger,
 	}
 }
 
@@ -68,10 +78,19 @@ func (rl *RateLimiter) Allow(ctx context.Context) error {
 	rl.callTimestamps = validTimestamps
 
 	if len(rl.callTimestamps) >= rl.maxCalls {
+		rl.logger.Warn("Rate limit exceeded",
+			zap.Int("current_calls", len(rl.callTimestamps)),
+			zap.Int("max_calls", rl.maxCalls),
+			zap.Duration("window_duration", rl.windowDuration),
+		)
 		return ErrRateLimitExceeded
 	}
 
 	rl.callTimestamps = append(rl.callTimestamps, now)
+	rl.logger.Debug("Rate limit check passed",
+		zap.Int("current_calls", len(rl.callTimestamps)),
+		zap.Int("max_calls", rl.maxCalls),
+	)
 	return nil
 }
 

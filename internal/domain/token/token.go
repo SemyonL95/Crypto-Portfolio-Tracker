@@ -1,6 +1,8 @@
 package token
 
-import "context"
+import (
+	"context"
+)
 
 type Token struct {
 	ID      string
@@ -13,4 +15,5 @@ type Token struct {
 type Repository interface {
 	GetList(ctx context.Context) ([]*Token, error)
 	GetByAddress(ctx context.Context, address string) (*Token, error)
+	GetByAddresses(ctx context.Context, addresses []string) map[string]*Token
 }

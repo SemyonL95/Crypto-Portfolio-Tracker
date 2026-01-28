@@ -1,8 +1,11 @@
-# Build stage
+# Debug stage - includes Delve debugger
 FROM golang:1.25-alpine AS builder
 
-# Install build dependencies
+# Install build dependencies and Delve
 RUN apk add --no-cache git gcc musl-dev
+
+# Install Delve debugger
+RUN go install github.com/go-delve/delve/cmd/dlv@latest
 
 # Set working directory
 WORKDIR /app
@@ -16,10 +19,11 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the application (CGO_ENABLED=1 for sqlite3)
-RUN CGO_ENABLED=1 GOOS=linux go build -o main ./cmd/http
+# Build the application with debug symbols (CGO_ENABLED=1 for sqlite3)
+# Build with -gcflags="all=-N -l" to disable optimizations for better debugging
+RUN CGO_ENABLED=1 GOOS=linux go build -gcflags="all=-N -l" -o main ./cmd/http
 
-# Final stage
+# Final stage for debug
 FROM alpine:latest
 
 # Install ca-certificates for HTTPS requests, sqlite3 for migrations, and wget for healthcheck
@@ -29,6 +33,8 @@ WORKDIR /root/
 
 # Copy the binary from builder
 COPY --from=builder /app/main .
+# Copy Delve debugger from builder
+COPY --from=builder /go/bin/dlv /usr/local/bin/dlv
 # Copy static files
 COPY --from=builder /app/static ./static
 # Copy migrations
@@ -42,10 +48,10 @@ RUN chmod +x ./scripts/migrate.sh
 # Create data directory
 RUN mkdir -p /data
 
-# Expose port
-EXPOSE 8080
+# Expose application port and debugger port
+EXPOSE 8080 2345
 
-# Create entrypoint script to run migrations before starting the app
+# Create entrypoint script to run migrations before starting the app with debugger
 RUN echo '#!/bin/sh' > /root/entrypoint.sh && \
     echo 'set -e' >> /root/entrypoint.sh && \
     echo 'echo "Running database migrations..."' >> /root/entrypoint.sh && \
@@ -55,10 +61,10 @@ RUN echo '#!/bin/sh' > /root/entrypoint.sh && \
     echo '    sqlite3 /data/portfolio.db < "$file" || exit 1' >> /root/entrypoint.sh && \
     echo '  fi' >> /root/entrypoint.sh && \
     echo 'done' >> /root/entrypoint.sh && \
-    echo 'echo "Migrations completed. Starting application..."' >> /root/entrypoint.sh && \
-    echo 'exec ./main' >> /root/entrypoint.sh && \
+    echo 'echo "Migrations completed. Starting application with debugger..."' >> /root/entrypoint.sh && \
+    echo 'exec dlv exec --listen=:2345 --headless=true --api-version=2 --accept-multiclient --continue ./main' >> /root/entrypoint.sh && \
     chmod +x /root/entrypoint.sh
 
-# Run the application via entrypoint
+# Run the application via entrypoint with debugger
 CMD ["/root/entrypoint.sh"]
 

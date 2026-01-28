@@ -9,13 +9,21 @@ import (
 
 const CurrencyDecimal = 8
 
-type Provider interface {
+type Cache[K string, P Price] interface {
+	GetBatch(ctx context.Context, tokenIDs []string) (map[K]*P, bool)
+	SetBatch(ctx context.Context, prices map[K]*P) bool
+}
+
+type PriceProvider interface {
 	GetPrices(
 		ctx context.Context,
 		tokens []*token.Token,
 		currency string,
 	) (map[*token.Token]*Price, error)
 }
+
+// Provider is an alias for PriceProvider for backward compatibility.
+type Provider = PriceProvider
 
 type Price struct {
 	Token       *token.Token

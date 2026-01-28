@@ -3,6 +3,8 @@
 
 ## Features
 
+For simplicity project supports only ethereum network and usd currency, the tokens preloaded to json files and loading in memmory in real world we need to update it periodically
+
 ## Architecture
 
 This project follows **Hexagonal Architecture (Ports & Adapters)** principles:
@@ -11,6 +13,8 @@ This project follows **Hexagonal Architecture (Ports & Adapters)** principles:
 - **Application Layer** (`/internal/application`): Use cases and orchestration
 - **Adapters Layer** (`/internal/adapters`): Infrastructure implementations
 - **Ports** (`/internal/ports`): Interface definitions
+
+
 
 ## Getting Started
 
@@ -154,7 +158,4 @@ Server handles SIGTERM and SIGINT signals, allowing in-flight requests to comple
 
 Health endpoint returns service status, timestamp, and version information.
 
-## License
-
-Apache 2.0
 

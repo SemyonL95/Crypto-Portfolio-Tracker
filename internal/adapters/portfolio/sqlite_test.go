@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 	"testtask/internal/domain/portfolio"
-	"testtask/internal/domain/price"
+	"testtask/internal/domain/token"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -667,12 +667,12 @@ func TestSQLiteRepository_ErrorHandling(t *testing.T) {
 }
 
 // Helper function to create a test holding in the database
-func insertTestHolding(t *testing.T, repo *SQLiteRepository, portfolioID, holdingID string, token *price.Token, amount *big.Int) {
+func insertTestHolding(t *testing.T, repo *SQLiteRepository, portfolioID, holdingID string, tok *token.Token, amount *big.Int) {
 	now := time.Now()
 	_, err := repo.db.Exec(`
 		INSERT INTO holdings (id, portfolio_id, chain_id, token_id, token_symbol, token_address, amount, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, holdingID, portfolioID, 1, token.ID, token.Symbol, token.Address, amount.String(), now.Format(time.RFC3339), now.Format(time.RFC3339))
+	`, holdingID, portfolioID, 1, tok.ID, tok.Symbol, tok.Address, amount.String(), now.Format(time.RFC3339), now.Format(time.RFC3339))
 	if err != nil {
 		t.Fatalf("Failed to insert test holding: %v", err)
 	}
@@ -699,8 +699,8 @@ func TestSQLiteRepository_Integration(t *testing.T) {
 		}
 
 		// 2. Insert holdings
-		token1 := &price.Token{ID: "bitcoin", Symbol: "BTC", Address: "0xbtc"}
-		token2 := &price.Token{ID: "ethereum", Symbol: "ETH", Address: "0xeth"}
+		token1 := &token.Token{ID: "bitcoin", Symbol: "BTC", Address: "0xbtc"}
+		token2 := &token.Token{ID: "ethereum", Symbol: "ETH", Address: "0xeth"}
 		insertTestHolding(t, repo, p1.ID, "workflow-holding-1", token1, big.NewInt(100000000))
 		insertTestHolding(t, repo, p1.ID, "workflow-holding-2", token2, big.NewInt(500000000000000000))
 		insertTestHolding(t, repo, p2.ID, "workflow-holding-3", token1, big.NewInt(200000000))

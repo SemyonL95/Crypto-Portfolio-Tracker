@@ -4,12 +4,17 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"strings"
+
+	loggeradapter "testtask/internal/adapters/logger"
 	domainHolding "testtask/internal/domain/holding"
 	domainPortfolio "testtask/internal/domain/portfolio"
 	"testtask/internal/domain/price"
 	"testtask/internal/domain/token"
 	domainTransaction "testtask/internal/domain/transaction"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 var (
@@ -18,157 +23,230 @@ var (
 	ErrPortfolioExists  = errors.New("portfolio already exists")
 )
 
+// WETHAddress is the Wrapped ETH address on Ethereum mainnet.
+// Used for price lookups when dealing with native ETH.
+const WETHAddress = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+
 type Service struct {
 	portfolioRepo   domainPortfolio.Repository
 	holdingRepo     domainHolding.Repository
-	transactionRepo domainTransaction.Repository
-	priceProvider   price.Provider
+	transactionRepo domainTransaction.Provider
+	tokenRepo       token.Repository
+	priceProvider   price.PriceProvider
+	logger          *loggeradapter.Logger
 }
 
-func NewService(repo domainPortfolio.Repository, priceProvider price.Provider) *Service {
-	return &Service{
-		portfolioRepo: repo,
-		priceProvider: priceProvider,
+func (s *Service) ListPortfolios(ctx context.Context) ([]*domainPortfolio.Portfolio, error) {
+	s.logger.Info("Listing all portfolios")
+	portfolios, err := s.portfolioRepo.List(ctx)
+	if err != nil {
+		s.logger.Error("Failed to list portfolios", zap.Error(err))
+		return nil, err
 	}
+	s.logger.Info("Successfully listed portfolios", zap.Int("count", len(portfolios)))
+	return portfolios, nil
 }
 
-// SetHoldingRepo sets the holding repository (for backward compatibility)
-func (s *Service) SetHoldingRepo(holdingRepo domainHolding.Repository) {
-	s.holdingRepo = holdingRepo
-}
-
-// SetTransactionRepo sets the transaction repository
-func (s *Service) SetTransactionRepo(transactionRepo domainTransaction.Repository) {
-	s.transactionRepo = transactionRepo
+func NewService(repo domainPortfolio.Repository, holdingRepo domainHolding.Repository, transactionRepo domainTransaction.Provider, tokenRepo token.Repository, priceProvider price.PriceProvider, logger *loggeradapter.Logger) *Service {
+	if logger == nil {
+		logger = loggeradapter.NewNopLogger()
+	}
+	return &Service{
+		portfolioRepo:   repo,
+		priceProvider:   priceProvider,
+		holdingRepo:     holdingRepo,
+		transactionRepo: transactionRepo,
+		tokenRepo:       tokenRepo,
+		logger:          logger,
+	}
 }
 
 func (s *Service) CreatePortfolio(ctx context.Context, p *domainPortfolio.Portfolio) error {
 	if p == nil {
+		s.logger.Warn("Attempted to create portfolio with nil portfolio")
 		return ErrInvalidPortfolio
 	}
 
 	if p.Address == "" {
+		s.logger.Warn("Attempted to create portfolio with empty address")
 		return ErrInvalidPortfolio
 	}
 
+	s.logger.Info("Creating portfolio", zap.String("address", p.Address), zap.String("id", p.ID))
+
 	existingByAddr, err := s.portfolioRepo.GetByAddress(ctx, p.Address)
 	if err == nil && existingByAddr != nil {
+		s.logger.Warn("Portfolio with address already exists", zap.String("address", p.Address))
 		return domainPortfolio.ErrPortfolioAddressExists
 	}
 	if err != nil && !errors.Is(err, domainPortfolio.ErrPortfolioNotFound) {
+		s.logger.Error("Error checking existing portfolio by address", zap.String("address", p.Address), zap.Error(err))
 		return err
 	}
 
 	if p.ID == "" {
 		newPortfolio := domainPortfolio.NewPortfolio("", p.Address)
-		return s.portfolioRepo.Create(ctx, newPortfolio)
+		if err := s.portfolioRepo.Create(ctx, newPortfolio); err != nil {
+			s.logger.Error("Failed to create portfolio", zap.String("address", p.Address), zap.Error(err))
+			return err
+		}
+		s.logger.Info("Successfully created portfolio", zap.String("address", p.Address), zap.String("id", newPortfolio.ID))
+		return nil
 	}
 
 	existing, err := s.portfolioRepo.GetByID(ctx, p.ID)
 	if err == nil && existing != nil {
+		s.logger.Warn("Portfolio with ID already exists", zap.String("id", p.ID))
 		return ErrPortfolioExists
 	}
 
 	if err != nil && !errors.Is(err, domainPortfolio.ErrPortfolioNotFound) {
+		s.logger.Error("Error checking existing portfolio by ID", zap.String("id", p.ID), zap.Error(err))
 		return err
 	}
 
 	newPortfolio := domainPortfolio.NewPortfolio(p.ID, p.Address)
-	return s.portfolioRepo.Create(ctx, newPortfolio)
+	if err := s.portfolioRepo.Create(ctx, newPortfolio); err != nil {
+		s.logger.Error("Failed to create portfolio", zap.String("id", p.ID), zap.String("address", p.Address), zap.Error(err))
+		return err
+	}
+	s.logger.Info("Successfully created portfolio", zap.String("id", p.ID), zap.String("address", p.Address))
+	return nil
 }
 
 func (s *Service) GetPortfolio(ctx context.Context, portfolioID string) (*domainPortfolio.Portfolio, error) {
+	s.logger.Info("Getting portfolio", zap.String("portfolio_id", portfolioID))
 	p, err := s.portfolioRepo.GetByIDWithHoldings(ctx, portfolioID)
 	if err != nil {
+		s.logger.Error("Failed to get portfolio", zap.String("portfolio_id", portfolioID), zap.Error(err))
 		return nil, err
 	}
-
+	s.logger.Info("Successfully retrieved portfolio", zap.String("portfolio_id", portfolioID), zap.Int("holdings_count", len(p.Holdings)))
 	return p, nil
 }
 
 func (s *Service) GetHoldings(ctx context.Context, portfolioID string) ([]*domainHolding.Holding, error) {
+	s.logger.Info("Getting holdings", zap.String("portfolio_id", portfolioID))
 	p, err := s.portfolioRepo.GetByIDWithHoldings(ctx, portfolioID)
 	if err != nil {
+		s.logger.Error("Failed to get holdings", zap.String("portfolio_id", portfolioID), zap.Error(err))
 		return nil, err
 	}
 	holdings := make([]*domainHolding.Holding, len(p.Holdings))
 	for i, h := range p.Holdings {
 		holdings[i] = h
 	}
+	s.logger.Info("Successfully retrieved holdings", zap.String("portfolio_id", portfolioID), zap.Int("count", len(holdings)))
 	return holdings, nil
 }
 
 func (s *Service) AddHolding(ctx context.Context, portfolioID string, holding *domainHolding.Holding) error {
 	if holding.Token == nil {
+		s.logger.Warn("Attempted to add holding with nil token", zap.String("portfolio_id", portfolioID))
 		return ErrInvalidHolding
 	}
 
 	if holding.Amount == nil || holding.Amount.Sign() <= 0 {
+		s.logger.Warn("Attempted to add holding with invalid amount", zap.String("portfolio_id", portfolioID), zap.String("token_id", holding.Token.ID))
 		return ErrInvalidHolding
 	}
+
+	s.logger.Info("Adding holding", zap.String("portfolio_id", portfolioID), zap.String("token_id", holding.Token.ID), zap.String("amount", holding.Amount.String()))
 
 	p, err := s.portfolioRepo.GetByIDWithHoldings(ctx, portfolioID)
 	if err != nil {
 		if errors.Is(err, domainPortfolio.ErrPortfolioNotFound) {
+			s.logger.Warn("Portfolio not found when adding holding", zap.String("portfolio_id", portfolioID))
 			return domainPortfolio.ErrPortfolioNotFound
 		}
+		s.logger.Error("Failed to get portfolio when adding holding", zap.String("portfolio_id", portfolioID), zap.Error(err))
 		return err
 	}
 
 	existing := s.FindHoldingByToken(p, holding.Token.ID)
 	if existing != nil {
+		s.logger.Info("Holding exists, updating amount", zap.String("portfolio_id", portfolioID), zap.String("token_id", holding.Token.ID), zap.String("holding_id", existing.ID))
 		newAmount := new(big.Int).Add(existing.Amount, holding.Amount)
 		s.UpdateAmount(existing, newAmount)
 
-		return s.holdingRepo.UpdateHolding(ctx, portfolioID, existing)
+		if err := s.holdingRepo.UpdateHolding(ctx, portfolioID, existing); err != nil {
+			s.logger.Error("Failed to update holding", zap.String("portfolio_id", portfolioID), zap.String("holding_id", existing.ID), zap.Error(err))
+			return err
+		}
+		s.logger.Info("Successfully updated holding", zap.String("portfolio_id", portfolioID), zap.String("holding_id", existing.ID), zap.String("new_amount", newAmount.String()))
+		return nil
 	}
 
 	// Create new domainHolding with UUID and portfolioID
 	newHolding := domainHolding.NewHolding(portfolioID, "", holding.Token, holding.Amount)
 
-	return s.holdingRepo.CreateHolding(ctx, portfolioID, newHolding)
+	if err := s.holdingRepo.CreateHolding(ctx, portfolioID, newHolding); err != nil {
+		s.logger.Error("Failed to create holding", zap.String("portfolio_id", portfolioID), zap.String("token_id", holding.Token.ID), zap.Error(err))
+		return err
+	}
+	s.logger.Info("Successfully created holding", zap.String("portfolio_id", portfolioID), zap.String("holding_id", newHolding.ID), zap.String("token_id", holding.Token.ID))
+	return nil
 }
 
-// UpdateHolding updates an existing domainHolding
 func (s *Service) UpdateHolding(ctx context.Context, portfolioID string, holdingID string, amount *big.Int) error {
 	if amount == nil || amount.Sign() < 0 {
+		s.logger.Warn("Attempted to update holding with invalid amount", zap.String("portfolio_id", portfolioID), zap.String("holding_id", holdingID))
 		return ErrInvalidHolding
 	}
+
+	s.logger.Info("Updating holding", zap.String("portfolio_id", portfolioID), zap.String("holding_id", holdingID), zap.String("amount", amount.String()))
 
 	p, err := s.portfolioRepo.GetByIDWithHoldings(ctx, portfolioID)
 	if err != nil {
 		if errors.Is(err, domainPortfolio.ErrPortfolioNotFound) {
+			s.logger.Warn("Portfolio not found when updating holding", zap.String("portfolio_id", portfolioID))
 			return domainPortfolio.ErrPortfolioNotFound
 		}
+		s.logger.Error("Failed to get portfolio when updating holding", zap.String("portfolio_id", portfolioID), zap.Error(err))
 		return err
 	}
 
 	existing := s.FindHolding(p, holdingID)
 	if existing == nil {
+		s.logger.Warn("Holding not found", zap.String("portfolio_id", portfolioID), zap.String("holding_id", holdingID))
 		return domainHolding.ErrHoldingNotFound
 	}
 
 	s.UpdateAmount(existing, amount)
 
-	return s.holdingRepo.UpdateHolding(ctx, portfolioID, existing)
+	if err := s.holdingRepo.UpdateHolding(ctx, portfolioID, existing); err != nil {
+		s.logger.Error("Failed to update holding", zap.String("portfolio_id", portfolioID), zap.String("holding_id", holdingID), zap.Error(err))
+		return err
+	}
+	s.logger.Info("Successfully updated holding", zap.String("portfolio_id", portfolioID), zap.String("holding_id", holdingID), zap.String("amount", amount.String()))
+	return nil
 }
 
-// DeleteHolding removes a domainHolding from the portfolio
 func (s *Service) DeleteHolding(ctx context.Context, portfolioID string, holdingID string) error {
+	s.logger.Info("Deleting holding", zap.String("portfolio_id", portfolioID), zap.String("holding_id", holdingID))
+
 	p, err := s.portfolioRepo.GetByIDWithHoldings(ctx, portfolioID)
 	if err != nil {
 		if errors.Is(err, domainPortfolio.ErrPortfolioNotFound) {
+			s.logger.Warn("Portfolio not found when deleting holding", zap.String("portfolio_id", portfolioID))
 			return domainPortfolio.ErrPortfolioNotFound
 		}
+		s.logger.Error("Failed to get portfolio when deleting holding", zap.String("portfolio_id", portfolioID), zap.Error(err))
 		return err
 	}
 
 	holding := s.FindHolding(p, holdingID)
 	if holding == nil {
+		s.logger.Warn("Holding not found", zap.String("portfolio_id", portfolioID), zap.String("holding_id", holdingID))
 		return domainHolding.ErrHoldingNotFound
 	}
 
-	return s.holdingRepo.DeleteHolding(ctx, portfolioID, holdingID)
+	if err := s.holdingRepo.DeleteHolding(ctx, portfolioID, holdingID); err != nil {
+		s.logger.Error("Failed to delete holding", zap.String("portfolio_id", portfolioID), zap.String("holding_id", holdingID), zap.Error(err))
+		return err
+	}
+	s.logger.Info("Successfully deleted holding", zap.String("portfolio_id", portfolioID), zap.String("holding_id", holdingID))
+	return nil
 }
 
 func (s *Service) UpdateAmount(holding *domainHolding.Holding, amount *big.Int) {
@@ -208,188 +286,233 @@ type HoldingValue struct {
 	Value   *big.Int
 }
 
-// Asset represents an asset from holdings or transactions with its value
-type Asset struct {
-	Token  *token.Token
-	Amount *big.Int
-	Price  *price.Price
-	Value  *big.Int
-	Source string // "holding" or "transaction"
-}
+func (s *Service) GetPortfolioAssets(ctx context.Context, portfolioID string, currency string) (*domainPortfolio.Portfolio, []*domainPortfolio.Asset, error) {
+	s.logger.Info("Getting portfolio assets", zap.String("portfolio_id", portfolioID), zap.String("currency", currency))
 
-// PortfolioAssets represents all assets in a portfolio with their values
-type PortfolioAssets struct {
-	PortfolioID  string
-	Address      string
-	Assets       []*Asset
-	TotalValue   *big.Int
-	Currency     string
-	CalculatedAt time.Time
-}
-
-// GetPortfolioAssets retrieves all assets from holdings and transactions and calculates their values
-func (s *Service) GetPortfolioAssets(ctx context.Context, portfolioID string, currency string) (*PortfolioAssets, error) {
-	if currency == "" {
-		currency = "usd"
-	}
-
-	// Get portfolio with holdings
-	p, err := s.portfolioRepo.GetByIDWithHoldings(ctx, portfolioID)
+	// Step 1: Fetch portfolio and holdings
+	portfolio, err := s.portfolioRepo.GetByIDWithHoldings(ctx, portfolioID)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, domainPortfolio.ErrPortfolioNotFound) {
+			s.logger.Warn("Portfolio not found", zap.String("portfolio_id", portfolioID))
+			return nil, nil, domainPortfolio.ErrPortfolioNotFound
+		}
+		s.logger.Error("Failed to get portfolio", zap.String("portfolio_id", portfolioID), zap.Error(err))
+		return nil, nil, err
+	}
+	s.logger.Info("Retrieved portfolio", zap.String("address", portfolio.Address), zap.Int("holdings_count", len(portfolio.Holdings)))
+
+	opts := domainTransaction.FilterOptions{
+		Address:  portfolio.Address,
+		Page:     1,
+		PageSize: 1000, // Fetch all transactions
 	}
 
-	// Get all transactions for the portfolio address
-	var transactions []domainTransaction.Transaction
-	if s.transactionRepo != nil && p.Address != "" {
-		opts := domainTransaction.FilterOptions{
-			Address: p.Address,
-		}
-		allTransactions, err := s.transactionRepo.GetAllTransactionsByAddress(ctx, p.Address, opts)
-		if err == nil {
-			transactions = allTransactions
-		}
-		// Ignore transaction errors - we'll just use holdings if transactions fail
-	}
-
-	// Collect unique tokens from holdings
-	tokenMap := make(map[string]*token.Token)
-	for _, holding := range p.Holdings {
-		if holding.Token != nil {
-			tokenMap[holding.Token.ID] = holding.Token
-			// Also index by address for transaction matching
-			if holding.Token.Address != "" {
-				tokenMap[holding.Token.Address] = holding.Token
-			}
-		}
-	}
-
-	transactionAmounts := make(map[string]*big.Int) // token address -> total amount
-	for _, tx := range transactions {
-		if tx.TokenAddress == "" {
-			continue
-		}
-
-		amount, ok := new(big.Int).SetString(tx.Amount, 10)
-		if !ok {
-			continue
-		}
-
-		// Determine if transaction is incoming or outgoing
-		// For simplicity, we'll aggregate all transactions
-		// In a real scenario, you'd want to track net balance changes
-		if tx.Direction == domainTransaction.TransactionDirectionIn {
-			if existing, ok := transactionAmounts[tx.TokenAddress]; ok {
-				transactionAmounts[tx.TokenAddress] = new(big.Int).Add(existing, amount)
-			} else {
-				transactionAmounts[tx.TokenAddress] = new(big.Int).Set(amount)
-			}
-		} else if tx.Direction == domainTransaction.TransactionDirectionOut {
-			if existing, ok := transactionAmounts[tx.TokenAddress]; ok {
-				transactionAmounts[tx.TokenAddress] = new(big.Int).Sub(existing, amount)
-			} else {
-				transactionAmounts[tx.TokenAddress] = new(big.Int).Neg(amount)
-			}
-		}
-	}
-
-	// Convert token map to slice for price lookup
-	tokens := make([]*token.Token, 0, len(tokenMap))
-	for _, t := range tokenMap {
-		tokens = append(tokens, t)
-	}
-
-	// Get prices for all tokens
-	prices, err := s.priceProvider.GetPrices(ctx, tokens, currency)
+	nativeTxs, err := s.transactionRepo.NativeTxsByAddress(ctx, portfolio.Address, opts)
 	if err != nil {
-		return nil, err
+		s.logger.Error("Failed to fetch native transactions", zap.String("address", portfolio.Address), zap.Error(err))
+		return nil, nil, err
+	}
+	s.logger.Debug("Fetched native transactions", zap.Int("count", len(nativeTxs)))
+
+	tokenTxs, err := s.transactionRepo.TokenTxsByAddress(ctx, portfolio.Address, opts)
+	if err != nil {
+		s.logger.Error("Failed to fetch token transactions", zap.String("address", portfolio.Address), zap.Error(err))
+		return nil, nil, err
+	}
+	s.logger.Debug("Fetched token transactions", zap.Int("count", len(tokenTxs)))
+
+	internalTxs, err := s.transactionRepo.InternalTxsByAddress(ctx, portfolio.Address, opts)
+	if err != nil {
+		s.logger.Error("Failed to fetch internal transactions", zap.String("address", portfolio.Address), zap.Error(err))
+		return nil, nil, err
+	}
+	s.logger.Debug("Fetched internal transactions", zap.Int("count", len(internalTxs)))
+
+	var allTransactions domainTransaction.Transactions
+	allTransactions = append(allTransactions, nativeTxs...)
+	allTransactions = append(allTransactions, tokenTxs...)
+	allTransactions = append(allTransactions, internalTxs...)
+
+	for _, tx := range allTransactions {
+		tx.SetDirectionForAddress(portfolio.Address)
+	}
+	s.logger.Info("Combined all transactions", zap.Int("total_count", len(allTransactions)))
+
+	txBalances, err := allTransactions.CalculateTokensAmounts()
+	if err != nil {
+		s.logger.Error("Failed to calculate transaction balances", zap.Error(err))
+		return nil, nil, err
+	}
+	s.logger.Debug("Calculated transaction balances", zap.Int("token_count", len(txBalances)))
+
+	type balanceProvider interface {
+		GetNativeBalance(ctx context.Context, address string) (*big.Int, error)
 	}
 
-	// Build asset list
-	assets := make([]*Asset, 0)
-	totalValue := big.NewInt(0)
+	var ethBalance *big.Int
+	if bp, ok := s.transactionRepo.(balanceProvider); ok {
+		ethBalance, err = bp.GetNativeBalance(ctx, portfolio.Address)
+		if err != nil {
+			s.logger.Warn("Failed to get native ETH balance, using transaction-calculated balance", zap.Error(err))
+			ethBalance = txBalances[""]
+			if ethBalance == nil {
+				ethBalance = big.NewInt(0)
+			}
+		} else {
+			s.logger.Debug("Fetched on-chain ETH balance", zap.String("balance", ethBalance.String()))
+		}
+	} else {
+		s.logger.Warn("Transaction provider doesn't support balance fetching, using transaction-calculated balance")
+		ethBalance = txBalances[""]
+		if ethBalance == nil {
+			ethBalance = big.NewInt(0)
+		}
+	}
 
-	// Add assets from holdings
-	for _, holding := range p.Holdings {
+	aggregatedBalances := make(map[string]*big.Int) // key: lowercase token address, "" for ETH
+
+	for _, holding := range portfolio.Holdings {
 		if holding.Token == nil || holding.Amount == nil {
 			continue
 		}
-
-		priceData, hasPrice := prices[holding.Token]
-		if !hasPrice {
-			priceData = nil
-		}
-
-		value := big.NewInt(0)
-		if priceData != nil && priceData.Value != nil {
-			value = domainPortfolio.CalculateValue(holding.Amount, holding.Token, priceData)
-			if value != nil {
-				totalValue.Add(totalValue, value)
-			}
-		}
-
-		assets = append(assets, &Asset{
-			Token:  holding.Token,
-			Amount: new(big.Int).Set(holding.Amount),
-			Price:  priceData,
-			Value:  value,
-			Source: "holding",
-		})
-	}
-
-	// Add assets from transactions (only if not already in holdings)
-	for tokenAddr, amount := range transactionAmounts {
-		// Skip if amount is zero or negative
-		if amount.Sign() <= 0 {
+		tokenAddr := strings.ToLower(holding.Token.Address)
+		if tokenAddr == "" {
 			continue
 		}
 
-		// Check if we already have this token in holdings
-		alreadyInHoldings := false
-		for _, holding := range p.Holdings {
-			if holding.Token != nil && holding.Token.Address == tokenAddr {
-				alreadyInHoldings = true
+		if existing, exists := aggregatedBalances[tokenAddr]; exists {
+			aggregatedBalances[tokenAddr] = new(big.Int).Add(existing, holding.Amount)
+		} else {
+			aggregatedBalances[tokenAddr] = new(big.Int).Set(holding.Amount)
+		}
+	}
+	s.logger.Debug("Added holdings to aggregated balances", zap.Int("holdings_count", len(portfolio.Holdings)))
+
+	for tokenAddr, txBalance := range txBalances {
+		if tokenAddr == "" {
+			continue
+		}
+
+		if existing, exists := aggregatedBalances[tokenAddr]; exists {
+			aggregatedBalances[tokenAddr] = new(big.Int).Add(existing, txBalance)
+		} else {
+			aggregatedBalances[tokenAddr] = new(big.Int).Set(txBalance)
+		}
+	}
+
+	if ethBalance != nil && ethBalance.Sign() > 0 {
+		aggregatedBalances[""] = new(big.Int).Set(ethBalance)
+	}
+	s.logger.Debug("Aggregated all balances", zap.Int("total_tokens", len(aggregatedBalances)))
+
+	filteredBalances := make(map[string]*big.Int)
+	for tokenAddr, balance := range aggregatedBalances {
+		if balance != nil && balance.Sign() > 0 {
+			filteredBalances[tokenAddr] = balance
+		}
+	}
+	s.logger.Info("Filtered balances", zap.Int("non_zero_count", len(filteredBalances)))
+
+	tokenAddresses := make([]string, 0, len(filteredBalances))
+	for tokenAddr := range filteredBalances {
+		if tokenAddr != "" {
+			tokenAddresses = append(tokenAddresses, tokenAddr)
+		}
+	}
+
+	// Fetch token metadata
+	tokensMap := s.tokenRepo.GetByAddresses(ctx, tokenAddresses)
+	s.logger.Debug("Fetched token metadata", zap.Int("found_count", len(tokensMap)))
+
+	// Step 7: Build token list for price fetching
+	var tokensForPricing []*token.Token
+	tokenAddressToToken := make(map[string]*token.Token)
+
+	// Add ERC-20 tokens
+	for tokenAddr, tok := range tokensMap {
+		if tok != nil {
+			tokensForPricing = append(tokensForPricing, tok)
+			tokenAddressToToken[strings.ToLower(tokenAddr)] = tok
+		}
+	}
+
+	// Handle native ETH - use WETH for price lookup
+	if _, hasETH := filteredBalances[""]; hasETH {
+		// Create a token struct for ETH using WETH address for price lookup
+		ethToken := &token.Token{
+			ID:      "ethereum",
+			Name:    "Ethereum",
+			Symbol:  "ETH",
+			Address: WETHAddress, // Use WETH address for price lookup
+			Decimal: 18,
+		}
+		tokensForPricing = append(tokensForPricing, ethToken)
+		tokenAddressToToken[""] = ethToken
+	}
+
+	// Fetch prices
+	pricesMap, err := s.priceProvider.GetPrices(ctx, tokensForPricing, currency)
+	if err != nil {
+		s.logger.Error("Failed to fetch prices", zap.Error(err))
+		return nil, nil, err
+	}
+	s.logger.Info("Fetched prices", zap.Int("price_count", len(pricesMap)))
+
+	// Step 8: Build Asset structs
+	assets := make([]*domainPortfolio.Asset, 0, len(filteredBalances))
+
+	for tokenAddr, balance := range filteredBalances {
+		tok := tokenAddressToToken[tokenAddr]
+		if tok == nil {
+			s.logger.Warn("Token metadata not found, skipping", zap.String("address", tokenAddr))
+			continue
+		}
+
+		// Find price for this token
+		var assetPrice *price.Price
+		for priceToken, p := range pricesMap {
+			// Match by address (case-insensitive)
+			if strings.EqualFold(priceToken.Address, tok.Address) {
+				assetPrice = p
 				break
 			}
 		}
 
-		if alreadyInHoldings {
-			continue
-		}
-
-		t, exists := tokenMap[tokenAddr]
-		if !exists {
-			continue
-		}
-
-		priceData, hasPrice := prices[t]
-		if !hasPrice {
-			priceData = nil
-		}
-
-		value := big.NewInt(0)
-		if priceData != nil && priceData.Value != nil {
-			value = domainPortfolio.CalculateValue(amount, t, priceData)
-			if value != nil {
-				totalValue.Add(totalValue, value)
+		if assetPrice == nil {
+			s.logger.Warn("Price not found for token, skipping value calculation", zap.String("token", tok.Symbol), zap.String("address", tok.Address))
+			// Still create asset but without price/value
+			asset := &domainPortfolio.Asset{
+				Token:  tok,
+				Amount: balance,
+				Price:  nil,
+				Value:  nil,
+				Source: "aggregated",
 			}
+			assets = append(assets, asset)
+			continue
 		}
 
-		assets = append(assets, &Asset{
-			Token:  t,
-			Amount: new(big.Int).Set(amount),
-			Price:  priceData,
+		// Calculate value
+		value := domainPortfolio.CalculateValue(tok.Decimal, balance.Mul(balance, big.NewInt(int64(tok.Decimal))), assetPrice)
+
+		asset := &domainPortfolio.Asset{
+			Token:  tok,
+			Amount: balance,
+			Price:  assetPrice,
 			Value:  value,
-			Source: "transaction",
-		})
+			Source: "aggregated",
+		}
+		assets = append(assets, asset)
+
+		s.logger.Debug("Created asset",
+			zap.String("token", tok.Symbol),
+			zap.String("amount", balance.String()),
+			zap.String("value", value.String()))
 	}
 
-	return &PortfolioAssets{
-		PortfolioID:  portfolioID,
-		Address:      p.Address,
-		Assets:       assets,
-		TotalValue:   totalValue,
-		Currency:     currency,
-		CalculatedAt: time.Now(),
-	}, nil
+	s.logger.Info("Successfully created portfolio assets",
+		zap.String("portfolio_id", portfolioID),
+		zap.Int("asset_count", len(assets)))
+
+	return portfolio, assets, nil
 }

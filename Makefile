@@ -1,8 +1,8 @@
 .PHONY: build run test test-coverage docker-build docker-up docker-down swagger clean migrate-up migrate-down migrate-reset migrate-status migrate-up-docker migrate-down-docker
 
-# Build the application
+# Build the application (CGO_ENABLED=1 required for sqlite3)
 build:
-	go build -o bin/main ./cmd/http
+	CGO_ENABLED=1 go build -o bin/main ./cmd/http
 
 # Run the application
 run:
@@ -25,13 +25,26 @@ swagger:
 docker-build:
 	docker build -t crypto-portfolio-tracker:latest .
 
+# Build Docker image for debugging
+docker-build-debug:
+	docker build -f Dockerfile.debug -t crypto-portfolio-tracker:debug .
+
 # Run with docker-compose
 docker-up:
 	docker-compose up -d
 
+# Run debug service with docker-compose
+docker-up-debug:
+	docker-compose up -d app-debug
+
 # Stop docker-compose
 docker-down:
 	docker-compose down
+
+# Stop debug service
+docker-down-debug:
+	docker-compose stop app-debug
+	docker-compose rm -f app-debug
 
 # Clean build artifacts
 clean:

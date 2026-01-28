@@ -3,11 +3,14 @@ package price
 import (
 	"context"
 	"fmt"
+	loggeradapter "testtask/internal/adapters/logger"
 	"testtask/internal/application/ratelimiter"
 	"testtask/internal/domain"
 	domainPrice "testtask/internal/domain/price"
 	domainToken "testtask/internal/domain/token"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 const cacheTTL = 1 * time.Minute
@@ -18,6 +21,7 @@ type Service struct {
 	primaryProvider  domainPrice.Provider
 	fallbackProvider domainPrice.Provider
 	rateLimiter      *ratelimiter.RateLimiter
+	logger           *loggeradapter.Logger
 }
 
 type RateLimitedService struct {
@@ -42,7 +46,6 @@ func (r *RateLimitedService) GetPrices(ctx context.Context, tokens []*domainToke
 		if err := r.rateLimiter.Allow(ctx); err == nil {
 			res, err := r.provider.GetPrices(ctx, batchTokens, currency)
 			if err != nil {
-				// TODO add logging
 				return nil, err
 			}
 			batchResults = res
@@ -62,13 +65,18 @@ func NewService(
 	primaryProvider domainPrice.Provider,
 	fallbackProvider domainPrice.Provider,
 	rateLimiter *ratelimiter.RateLimiter,
+	logger *loggeradapter.Logger,
 ) *Service {
+	if logger == nil {
+		logger = loggeradapter.NewNopLogger()
+	}
 	return &Service{
 		cacheTTL:         cacheTTL,
 		cache:            cache,
 		primaryProvider:  primaryProvider,
 		fallbackProvider: fallbackProvider,
 		rateLimiter:      rateLimiter,
+		logger:           logger,
 	}
 }
 
@@ -83,8 +91,11 @@ func (s *Service) GetPrices(
 	currency string,
 ) (map[*domainToken.Token]*domainPrice.Price, error) {
 	if len(tokens) == 0 {
+		s.logger.Debug("GetPrices called with empty tokens list")
 		return make(map[*domainToken.Token]*domainPrice.Price), nil
 	}
+
+	s.logger.Info("Getting prices", zap.Int("token_count", len(tokens)), zap.String("currency", currency))
 
 	results := make(map[*domainToken.Token]*domainPrice.Price)
 	var missedTokens []*domainToken.Token
@@ -92,13 +103,15 @@ func (s *Service) GetPrices(
 	cacheKeys := make([]string, 0, len(tokens))
 	tokenToKey := make(map[string]*domainToken.Token)
 	for _, t := range tokens {
-		key := s.cacheKey(t.ID, currency)
+		key := s.cacheKey(t.Address, currency)
 		cacheKeys = append(cacheKeys, key)
 		tokenToKey[key] = t
 	}
 
 	cachedPrices := s.cache.GetBatch(ctx, cacheKeys)
 	now := time.Now()
+	cacheHits := 0
+	cacheMisses := 0
 
 	for key, cachedPrice := range cachedPrices {
 		t := tokenToKey[key]
@@ -109,41 +122,65 @@ func (s *Service) GetPrices(
 		if now.Sub(cachedPrice.LastUpdated) < s.cacheTTL {
 			priceCopy := cachedPrice
 			results[t] = &priceCopy
+			cacheHits++
 		} else {
 			missedTokens = append(missedTokens, t)
+			cacheMisses++
 		}
 	}
 
 	for _, t := range tokens {
 		if _, found := results[t]; !found {
 			missedTokens = append(missedTokens, t)
+			cacheMisses++
 		}
 	}
 
+	s.logger.Info("Cache lookup completed", zap.Int("cache_hits", cacheHits), zap.Int("cache_misses", cacheMisses), zap.Int("total_tokens", len(tokens)))
+
 	if len(missedTokens) > 0 {
+		s.logger.Info("Fetching prices from provider", zap.Int("missed_token_count", len(missedTokens)), zap.String("currency", currency))
 		var fetched map[*domainToken.Token]*domainPrice.Price
 		var err error
+		usedFallback := false
 
 		// If rate limiter is provided, check rate limit before calling primary provider
 		if s.rateLimiter != nil {
 			if err := s.rateLimiter.Allow(ctx); err == nil {
 				// Rate limit allows, try primary provider
+				s.logger.Debug("Rate limit allows, calling primary provider", zap.Int("token_count", len(missedTokens)))
 				fetched, err = s.primaryProvider.GetPrices(ctx, missedTokens, currency)
+				if err != nil {
+					s.logger.Warn("Primary provider failed", zap.Error(err))
+				} else {
+					s.logger.Info("Successfully fetched prices from primary provider", zap.Int("price_count", len(fetched)))
+				}
 			} else {
 				// Rate limit exceeded, skip primary and go to fallback
+				s.logger.Warn("Rate limit exceeded, using fallback provider", zap.Error(err))
 				err = fmt.Errorf("rate limit exceeded: %w", err)
 			}
 		} else {
 			// No rate limiter, call primary provider directly
+			s.logger.Debug("No rate limiter, calling primary provider directly", zap.Int("token_count", len(missedTokens)))
 			fetched, err = s.primaryProvider.GetPrices(ctx, missedTokens, currency)
+			if err != nil {
+				s.logger.Warn("Primary provider failed", zap.Error(err))
+			} else {
+				s.logger.Info("Successfully fetched prices from primary provider", zap.Int("price_count", len(fetched)))
+			}
 		}
 
 		// If primary failed or was rate limited, try fallback
 		if err != nil {
+			s.logger.Info("Falling back to fallback provider", zap.Int("token_count", len(missedTokens)))
+			usedFallback = true
 			fetched, err = s.fallbackProvider.GetPrices(ctx, missedTokens, currency)
 			if err != nil {
+				s.logger.Error("Both primary and fallback providers failed", zap.Error(err))
 				return nil, fmt.Errorf("both primary and fallback providers failed: %w", err)
 			}
+			s.logger.Info("Successfully fetched prices from fallback provider", zap.Int("price_count", len(fetched)))
 		}
 
 		for t, p := range fetched {
@@ -151,8 +188,14 @@ func (s *Service) GetPrices(
 		}
 
 		s.cacheFetchedPrices(ctx, fetched, currency)
+		if usedFallback {
+			s.logger.Debug("Cached prices from fallback provider", zap.Int("price_count", len(fetched)))
+		} else {
+			s.logger.Debug("Cached prices from primary provider", zap.Int("price_count", len(fetched)))
+		}
 	}
 
+	s.logger.Info("Successfully retrieved all prices", zap.Int("total_prices", len(results)), zap.String("currency", currency))
 	return results, nil
 }
 
@@ -167,7 +210,7 @@ func (s *Service) cacheFetchedPrices(
 ) {
 	cacheItems := make(map[string]domainPrice.Price, len(prices))
 	for t, p := range prices {
-		key := s.cacheKey(t.ID, currency)
+		key := s.cacheKey(t.Address, currency)
 		cacheItems[key] = *p
 	}
 	s.cache.SetBatch(ctx, cacheItems)
