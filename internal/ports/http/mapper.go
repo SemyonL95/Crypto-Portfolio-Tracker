@@ -198,11 +198,15 @@ func ToHTTPAsset(a *domainPortfolio.Asset) *Asset {
 		priceUSD = bigIntToUSDFloat(a.Price.Value)
 	}
 
-	//valueUSD := bigIntToUSDFloat(a.Value)
+	var valueUSD float64
+	if a.Value != nil {
+		valueUSD = bigIntToUSDFloat(a.Value)
+	}
 
 	return &Asset{
 		Token:    tokenInfo,
-		ValueUSD: bigIntToUSDFloat(a.Amount),
+		Amount:   a.Amount,
+		ValueUSD: valueUSD,
 		PriceUSD: priceUSD,
 		Source:   a.Source,
 	}

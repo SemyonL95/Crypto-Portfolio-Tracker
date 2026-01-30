@@ -4,6 +4,8 @@ import (
 	"context"
 )
 
+const ZeroAddress = "0x0000000000000000000000000000000000000"
+
 type Token struct {
 	ID      string
 	Name    string

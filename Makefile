@@ -1,4 +1,4 @@
-.PHONY: build run test test-coverage docker-build docker-up docker-down swagger clean migrate-up migrate-down migrate-reset migrate-status migrate-up-docker migrate-down-docker
+.PHONY: build run test test-coverage docker-build docker-up docker-down swagger clean migrate-up migrate-down migrate-reset migrate-status migrate-up-docker migrate-down-docker collect-tokens
 
 # Build the application (CGO_ENABLED=1 required for sqlite3)
 build:
@@ -7,6 +7,10 @@ build:
 # Run the application
 run:
 	go run ./cmd/http
+
+# Collect tokens from CoinGecko and write to static/tokens.json
+collect-tokens:
+	go run ./cmd/tokens_collector
 
 # Run tests
 test:

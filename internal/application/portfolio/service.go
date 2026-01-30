@@ -307,29 +307,23 @@ func (s *Service) GetPortfolioAssets(ctx context.Context, portfolioID string, cu
 		PageSize: 1000, // Fetch all transactions
 	}
 
-	nativeTxs, err := s.transactionRepo.NativeTxsByAddress(ctx, portfolio.Address, opts)
-	if err != nil {
-		s.logger.Error("Failed to fetch native transactions", zap.String("address", portfolio.Address), zap.Error(err))
-		return nil, nil, err
-	}
-	s.logger.Debug("Fetched native transactions", zap.Int("count", len(nativeTxs)))
-
 	tokenTxs, err := s.transactionRepo.TokenTxsByAddress(ctx, portfolio.Address, opts)
 	if err != nil {
-		s.logger.Error("Failed to fetch token transactions", zap.String("address", portfolio.Address), zap.Error(err))
-		return nil, nil, err
+		s.logger.Warn("Failed to fetch token transactions, continuing with holdings only", zap.String("address", portfolio.Address), zap.Error(err))
+		tokenTxs = []*domainTransaction.Transaction{}
+	} else {
+		s.logger.Debug("Fetched token transactions", zap.Int("count", len(tokenTxs)))
 	}
-	s.logger.Debug("Fetched token transactions", zap.Int("count", len(tokenTxs)))
 
 	internalTxs, err := s.transactionRepo.InternalTxsByAddress(ctx, portfolio.Address, opts)
 	if err != nil {
-		s.logger.Error("Failed to fetch internal transactions", zap.String("address", portfolio.Address), zap.Error(err))
-		return nil, nil, err
+		s.logger.Warn("Failed to fetch internal transactions, continuing with holdings only", zap.String("address", portfolio.Address), zap.Error(err))
+		internalTxs = []*domainTransaction.Transaction{}
+	} else {
+		s.logger.Debug("Fetched internal transactions", zap.Int("count", len(internalTxs)))
 	}
-	s.logger.Debug("Fetched internal transactions", zap.Int("count", len(internalTxs)))
 
 	var allTransactions domainTransaction.Transactions
-	allTransactions = append(allTransactions, nativeTxs...)
 	allTransactions = append(allTransactions, tokenTxs...)
 	allTransactions = append(allTransactions, internalTxs...)
 
@@ -346,27 +340,17 @@ func (s *Service) GetPortfolioAssets(ctx context.Context, portfolioID string, cu
 	s.logger.Debug("Calculated transaction balances", zap.Int("token_count", len(txBalances)))
 
 	type balanceProvider interface {
-		GetNativeBalance(ctx context.Context, address string) (*big.Int, error)
 	}
 
 	var ethBalance *big.Int
-	if bp, ok := s.transactionRepo.(balanceProvider); ok {
-		ethBalance, err = bp.GetNativeBalance(ctx, portfolio.Address)
-		if err != nil {
-			s.logger.Warn("Failed to get native ETH balance, using transaction-calculated balance", zap.Error(err))
-			ethBalance = txBalances[""]
-			if ethBalance == nil {
-				ethBalance = big.NewInt(0)
-			}
-		} else {
-			s.logger.Debug("Fetched on-chain ETH balance", zap.String("balance", ethBalance.String()))
-		}
+	ethBalance, err = s.transactionRepo.GetNativeBalance(ctx, portfolio.Address)
+	if err != nil {
+		s.logger.Debug("Failed to get native ETH balance, skipping on-chain balance", zap.Error(err))
+		// Don't use transaction-calculated balance as it may be wrong without full transaction history
+		// Instead, rely only on holdings data
+		ethBalance = nil
 	} else {
-		s.logger.Warn("Transaction provider doesn't support balance fetching, using transaction-calculated balance")
-		ethBalance = txBalances[""]
-		if ethBalance == nil {
-			ethBalance = big.NewInt(0)
-		}
+		s.logger.Debug("Fetched on-chain ETH balance", zap.String("balance", ethBalance.String()))
 	}
 
 	aggregatedBalances := make(map[string]*big.Int) // key: lowercase token address, "" for ETH
@@ -376,8 +360,9 @@ func (s *Service) GetPortfolioAssets(ctx context.Context, portfolioID string, cu
 			continue
 		}
 		tokenAddr := strings.ToLower(holding.Token.Address)
-		if tokenAddr == "" {
-			continue
+		// Treat zero address as native ETH (empty string key)
+		if tokenAddr == token.ZeroAddress {
+			tokenAddr = token.ZeroAddress
 		}
 
 		if existing, exists := aggregatedBalances[tokenAddr]; exists {
@@ -401,7 +386,7 @@ func (s *Service) GetPortfolioAssets(ctx context.Context, portfolioID string, cu
 	}
 
 	if ethBalance != nil && ethBalance.Sign() > 0 {
-		aggregatedBalances[""] = new(big.Int).Set(ethBalance)
+		aggregatedBalances[token.ZeroAddress] = new(big.Int).Set(ethBalance)
 	}
 	s.logger.Debug("Aggregated all balances", zap.Int("total_tokens", len(aggregatedBalances)))
 
@@ -437,7 +422,7 @@ func (s *Service) GetPortfolioAssets(ctx context.Context, portfolioID string, cu
 	}
 
 	// Handle native ETH - use WETH for price lookup
-	if _, hasETH := filteredBalances[""]; hasETH {
+	if _, hasETH := filteredBalances[token.ZeroAddress]; hasETH {
 		// Create a token struct for ETH using WETH address for price lookup
 		ethToken := &token.Token{
 			ID:      "ethereum",
@@ -447,7 +432,7 @@ func (s *Service) GetPortfolioAssets(ctx context.Context, portfolioID string, cu
 			Decimal: 18,
 		}
 		tokensForPricing = append(tokensForPricing, ethToken)
-		tokenAddressToToken[""] = ethToken
+		tokenAddressToToken[token.ZeroAddress] = ethToken
 	}
 
 	// Fetch prices
@@ -462,10 +447,15 @@ func (s *Service) GetPortfolioAssets(ctx context.Context, portfolioID string, cu
 	assets := make([]*domainPortfolio.Asset, 0, len(filteredBalances))
 
 	for tokenAddr, balance := range filteredBalances {
+
 		tok := tokenAddressToToken[tokenAddr]
 		if tok == nil {
 			s.logger.Warn("Token metadata not found, skipping", zap.String("address", tokenAddr))
 			continue
+		}
+
+		if tok.Name == "ETH" {
+			tok.Address = token.ZeroAddress
 		}
 
 		// Find price for this token
@@ -493,7 +483,7 @@ func (s *Service) GetPortfolioAssets(ctx context.Context, portfolioID string, cu
 		}
 
 		// Calculate value
-		value := domainPortfolio.CalculateValue(tok.Decimal, balance.Mul(balance, big.NewInt(int64(tok.Decimal))), assetPrice)
+		value := domainPortfolio.CalculateValue(tok.Decimal, balance, assetPrice)
 
 		asset := &domainPortfolio.Asset{
 			Token:  tok,

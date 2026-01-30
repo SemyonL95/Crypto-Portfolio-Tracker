@@ -93,6 +93,7 @@ type Provider interface {
 	NativeTxsByAddress(ctx context.Context, address string, opts FilterOptions) ([]*Transaction, error)
 	TokenTxsByAddress(ctx context.Context, address string, opts FilterOptions) ([]*Transaction, error)
 	InternalTxsByAddress(ctx context.Context, address string, opts FilterOptions) ([]*Transaction, error)
+	GetNativeBalance(ctx context.Context, address string) (*big.Int, error)
 }
 
 type AggregatedData struct {

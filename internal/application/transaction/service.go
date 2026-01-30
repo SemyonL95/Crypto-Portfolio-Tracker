@@ -50,9 +50,6 @@ func (s *Service) GetTransactions(
 	return result, len(result), nil
 }
 
-// TransactionsByAddress aggregates normal, internal and token transactions
-// for a given address, classifies direction and type, applies filtering
-// and returns a (possibly paginated) slice.
 func (s *Service) TransactionsByAddress(
 	ctx context.Context,
 	address string,

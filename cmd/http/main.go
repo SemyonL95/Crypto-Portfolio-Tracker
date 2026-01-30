@@ -82,7 +82,7 @@ func main() {
 	}
 
 	// Initialize CoinGecko client
-	coingeckoBaseURL := getEnv("COINGECKO_BASE_URL", "https://api.coingecko.com/api/v3")
+	coingeckoBaseURL := getEnv("COINGECKO_BASE_URL", "https://pro-api.coingecko.com/api/v3/")
 	coingeckoClient := coingeckoadapter.NewClient(httpClient, coingeckoBaseURL, cfg.Price.CoinGeckoAPIKey)
 
 	if cfg.Price.CoinGeckoAPIKey == "" {

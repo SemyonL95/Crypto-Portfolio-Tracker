@@ -1,13 +1,8 @@
 package http
 
 import (
-	"context"
 	"fmt"
 	"math/big"
-	domainHolding "testtask/internal/domain/holding"
-	domainPortfolio "testtask/internal/domain/portfolio"
-	"testtask/internal/domain/price"
-	"testtask/internal/domain/token"
 	"testtask/internal/domain/transaction"
 	"time"
 )
@@ -21,29 +16,6 @@ type TransactionFilters struct {
 	ToDate   *time.Time `json:"to_date"`
 	Page     int        `json:"page"`
 	PageSize int        `json:"page_size"`
-}
-
-// TransactionService defines the interface for transaction operations.
-type TransactionService interface {
-	GetTransactions(ctx context.Context, address string, opts transaction.FilterOptions) ([]transaction.Transaction, int, error)
-}
-
-type PriceService interface {
-	GetPrices(ctx context.Context, tokens []*token.Token, currency string) (map[*token.Token]*price.Price, error)
-}
-
-type PortfolioService interface {
-	ListPortfolios(ctx context.Context) ([]*domainPortfolio.Portfolio, error)
-	CreatePortfolio(ctx context.Context, portfolio *domainPortfolio.Portfolio) error
-	GetPortfolio(ctx context.Context, portfolioID string) (*domainPortfolio.Portfolio, error)
-	AddHolding(ctx context.Context, userID string, holding *domainHolding.Holding) error
-	UpdateHolding(ctx context.Context, userID string, holdingID string, amount *big.Int) error
-	DeleteHolding(ctx context.Context, userID string, holdingID string) error
-	GetPortfolioAssets(ctx context.Context, portfolioID string, currency string) (*domainPortfolio.Portfolio, []*domainPortfolio.Asset, error)
-}
-
-type TokensService interface {
-	GetTokenByAddress(_ context.Context, address string) (*token.Token, bool)
 }
 
 type Transaction struct {

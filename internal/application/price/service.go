@@ -145,30 +145,20 @@ func (s *Service) GetPrices(
 		usedFallback := false
 
 		// If rate limiter is provided, check rate limit before calling primary provider
-		if s.rateLimiter != nil {
-			if err := s.rateLimiter.Allow(ctx); err == nil {
-				// Rate limit allows, try primary provider
-				s.logger.Debug("Rate limit allows, calling primary provider", zap.Int("token_count", len(missedTokens)))
-				fetched, err = s.primaryProvider.GetPrices(ctx, missedTokens, currency)
-				if err != nil {
-					s.logger.Warn("Primary provider failed", zap.Error(err))
-				} else {
-					s.logger.Info("Successfully fetched prices from primary provider", zap.Int("price_count", len(fetched)))
-				}
-			} else {
-				// Rate limit exceeded, skip primary and go to fallback
-				s.logger.Warn("Rate limit exceeded, using fallback provider", zap.Error(err))
-				err = fmt.Errorf("rate limit exceeded: %w", err)
-			}
-		} else {
-			// No rate limiter, call primary provider directly
-			s.logger.Debug("No rate limiter, calling primary provider directly", zap.Int("token_count", len(missedTokens)))
+		rateLimitErr := s.rateLimiter.Allow(ctx)
+		if rateLimitErr == nil {
+			// Rate limit allows, try primary provider
+			s.logger.Debug("Rate limit allows, calling primary provider", zap.Int("token_count", len(missedTokens)))
 			fetched, err = s.primaryProvider.GetPrices(ctx, missedTokens, currency)
 			if err != nil {
 				s.logger.Warn("Primary provider failed", zap.Error(err))
 			} else {
 				s.logger.Info("Successfully fetched prices from primary provider", zap.Int("price_count", len(fetched)))
 			}
+		} else {
+			// Rate limit exceeded, skip primary and go to fallback
+			s.logger.Warn("Rate limit exceeded, using fallback provider", zap.Error(rateLimitErr))
+			err = fmt.Errorf("rate limit exceeded: %w", rateLimitErr)
 		}
 
 		// If primary failed or was rate limited, try fallback

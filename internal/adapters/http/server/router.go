@@ -22,8 +22,8 @@ func registerRoutes(e *echo.Echo, handler *HandlerAdapter) {
 	portfolio.POST("", handler.CreatePortfolio)
 	portfolio.GET("/:portfolioID", handler.GetPortfolio)
 	portfolio.GET("/:portfolioID/assets", handler.GetPortfolioAssets)
-	portfolio.POST("/holdings", handler.AddHolding)
-	portfolio.PUT("/holdings/:holdingID", handler.UpdateHolding)
+	portfolio.POST("/:portfolioID/holdings", handler.AddHolding)
+	portfolio.PUT("/:portfolioID/holdings/:holdingID", handler.UpdateHolding)
 	portfolio.DELETE("/holdings/:holdingID", handler.DeleteHolding)
 
 	//Transaction endpoints

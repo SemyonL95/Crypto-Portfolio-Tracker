@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"testtask/internal/domain/token"
 	"time"
 
 	"testtask/internal/application/ratelimiter"
@@ -172,8 +173,8 @@ func (p *Provider) GetNativeBalance(ctx context.Context, address string) (*big.I
 	addr := strings.ToLower(strings.TrimSpace(address))
 
 	params := url.Values{}
-	params.Set("module", "proxy")
-	params.Set("action", "eth_getBalance")
+	params.Set("module", "account")
+	params.Set("action", "balance")
 	params.Set("address", addr)
 	params.Set("tag", "latest")
 
@@ -183,7 +184,7 @@ func (p *Provider) GetNativeBalance(ctx context.Context, address string) (*big.I
 	}
 
 	// The result is a hex string like "0x1234..."
-	balance := parseHexBig(resp.Result)
+	balance := parseBig(resp.Result)
 	return balance, nil
 }
 
@@ -222,18 +223,19 @@ func mapNormalTxs(items []normalTx, address string) []*transaction.Transaction {
 		}
 
 		t := &transaction.Transaction{
-			ID:          it.Hash,
-			Hash:        it.Hash,
-			From:        strings.ToLower(it.From),
-			To:          strings.ToLower(it.To),
-			Amount:      amount,
-			Status:      status,
-			Method:      it.FunctionName,
-			MethodSig:   it.MethodID,
-			GasPrice:    gasPrice,
-			GasUsed:     gasUsed,
-			Timestamp:   ts,
-			BlockNumber: blockNum,
+			ID:           it.Hash,
+			Hash:         it.Hash,
+			From:         strings.ToLower(it.From),
+			To:           strings.ToLower(it.To),
+			Amount:       amount,
+			Status:       status,
+			Method:       it.FunctionName,
+			MethodSig:    it.MethodID,
+			TokenAddress: token.ZeroAddress,
+			GasPrice:     gasPrice,
+			GasUsed:      gasUsed,
+			Timestamp:    ts,
+			BlockNumber:  blockNum,
 		}
 
 		// Set direction based on address
@@ -330,20 +332,4 @@ func parseBlockNumber(s string) int64 {
 		return 0
 	}
 	return n
-}
-
-// parseHexBig parses a hex string (with or without 0x prefix) to big.Int.
-func parseHexBig(s string) *big.Int {
-	if s == "" {
-		return big.NewInt(0)
-	}
-	// Remove 0x prefix if present
-	s = strings.TrimPrefix(s, "0x")
-	s = strings.TrimPrefix(s, "0X")
-
-	v, ok := new(big.Int).SetString(s, 16)
-	if !ok {
-		return big.NewInt(0)
-	}
-	return v
 }

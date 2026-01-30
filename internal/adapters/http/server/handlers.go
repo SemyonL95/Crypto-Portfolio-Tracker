@@ -5,7 +5,9 @@ import (
 	"math/big"
 	"net/http"
 	"strconv"
+	"strings"
 	"testtask/internal/adapters/logger"
+	"testtask/internal/domain"
 	"testtask/internal/domain/holding"
 	"testtask/internal/domain/portfolio"
 	"time"
@@ -18,19 +20,19 @@ import (
 
 // HandlerAdapter adapts holding services to HTTP handlers
 type HandlerAdapter struct {
-	transactionService httpports.TransactionService
-	portfolioService   httpports.PortfolioService
-	priceService       httpports.PriceService
-	tokensService      httpports.TokensService
+	transactionService domain.TransactionService
+	portfolioService   domain.PortfolioService
+	priceService       domain.PriceService
+	tokensService      domain.TokensService
 	logger             *logger.Logger
 }
 
 // NewHandlerAdapter creates a new handler adapter
 func NewHandlerAdapter(
-	transactionService httpports.TransactionService,
-	portfolioService httpports.PortfolioService,
-	priceService httpports.PriceService,
-	tokensService httpports.TokensService,
+	transactionService domain.TransactionService,
+	portfolioService domain.PortfolioService,
+	priceService domain.PriceService,
+	tokensService domain.TokensService,
 	logger *logger.Logger,
 ) *HandlerAdapter {
 	return &HandlerAdapter{
@@ -151,7 +153,7 @@ func (h *HandlerAdapter) GetPortfolioList(c echo.Context) error {
 
 // AddHolding handles POST /api/v1/portfolio/:portofolioID/holdingRepo
 func (h *HandlerAdapter) AddHolding(c echo.Context) error {
-	portofolioID := c.Param("portofolioID")
+	portofolioID := c.Param("portfolioID")
 	if portofolioID == "" {
 		return c.JSON(http.StatusBadRequest, httpports.ErrorResponse{
 			Error:   "Bad Request",
@@ -177,7 +179,7 @@ func (h *HandlerAdapter) AddHolding(c echo.Context) error {
 		})
 	}
 
-	t, ok := h.tokensService.GetTokenByAddress(c.Request().Context(), req.TokenAddress)
+	t, ok := h.tokensService.GetTokenByAddress(c.Request().Context(), strings.ToLower(req.TokenAddress))
 	if !ok {
 		return c.JSON(http.StatusBadRequest, httpports.ErrorResponse{
 			Error:   "Bad Request",
@@ -338,14 +340,7 @@ func (h *HandlerAdapter) GetPortfolioAssets(c echo.Context) error {
 			Message: "portfolioID is required",
 		})
 	}
-
-	// Get currency from query parameter, default to "usd"
-	currency := c.QueryParam("currency")
-	if currency == "" {
-		currency = "usd"
-	}
-
-	p, assets, err := h.portfolioService.GetPortfolioAssets(c.Request().Context(), portfolioID, currency)
+	p, assets, err := h.portfolioService.GetPortfolioAssets(c.Request().Context(), portfolioID, "usd") // hardcoded
 	if err != nil {
 		if errors.Is(err, portfolio.ErrPortfolioNotFound) {
 			h.logger.Warn("Portfolio not found", zap.String("portfolioID", portfolioID), zap.Error(err))
